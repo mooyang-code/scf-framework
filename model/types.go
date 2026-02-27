@@ -1,6 +1,9 @@
 package model
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
 
 // ========== 触发器相关 ==========
 
@@ -17,7 +20,7 @@ const (
 type TriggerEvent struct {
 	Type     TriggerType       `json:"type"`
 	Name     string            `json:"name"`
-	Payload  []byte            `json:"payload,omitempty"`
+	Payload  json.RawMessage   `json:"payload,omitempty"`
 	Metadata map[string]string `json:"metadata,omitempty"`
 }
 
