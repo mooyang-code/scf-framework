@@ -113,8 +113,8 @@ func (m *Manager) wrapHandler() TriggerHandler {
 		)
 
 		// 将 TaskStore 快照注入 TriggerEvent.Payload（供 HTTPPluginAdapter 插件使用）
-		// 始终序列化（即使 tasks 为空），保证插件侧能拿到完整结构
-		if m.taskStore != nil && len(event.Payload) == 0 {
+		// 每次触发都从 TaskStore 读取最新快照
+		if m.taskStore != nil {
 			snapshot := &TriggerPayload{
 				Tasks:    m.taskStore.GetAll(),
 				TasksMD5: m.taskStore.GetCurrentMD5(),
@@ -129,9 +129,6 @@ func (m *Manager) wrapHandler() TriggerHandler {
 			} else {
 				log.ErrorContextf(ctx, "[TriggerManager] failed to marshal payload: %v", err)
 			}
-		} else {
-			log.InfoContextf(ctx, "[TriggerManager] payload skip: taskStore=%v, existing_payload_len=%d",
-				m.taskStore != nil, len(event.Payload))
 		}
 
 		log.InfoContextf(ctx, "[TriggerManager] dispatching trigger: name=%s, type=%s, tasks=%d",
