@@ -148,9 +148,12 @@ func (a *HTTPPluginAdapter) OnTrigger(ctx context.Context, event *model.TriggerE
 
 	resp, err := a.client.Do(req)
 	if err != nil {
+		log.ErrorContextf(ctx, "[HTTPPluginAdapter] HTTP request failed for plugin %s: %v (this means no task_results will be reported)", a.name, err)
 		return nil, fmt.Errorf("failed to send trigger event to plugin %s: %w", a.name, err)
 	}
 	defer resp.Body.Close()
+
+	log.InfoContextf(ctx, "[HTTPPluginAdapter] plugin %s responded: statusCode=%d", a.name, resp.StatusCode)
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("plugin %s returned status %d for trigger event", a.name, resp.StatusCode)
@@ -163,7 +166,10 @@ func (a *HTTPPluginAdapter) OnTrigger(ctx context.Context, event *model.TriggerE
 		return nil, nil
 	}
 
+	log.InfoContextf(ctx, "[HTTPPluginAdapter] plugin %s response body: len=%d, body=%s", a.name, len(body), string(body))
+
 	if len(body) == 0 {
+		log.WarnContextf(ctx, "[HTTPPluginAdapter] plugin %s returned empty body", a.name)
 		return nil, nil
 	}
 
@@ -174,9 +180,7 @@ func (a *HTTPPluginAdapter) OnTrigger(ctx context.Context, event *model.TriggerE
 		return nil, nil
 	}
 
-	if len(triggerResp.TaskResults) > 0 {
-		log.InfoContextf(ctx, "[HTTPPluginAdapter] plugin %s returned %d task results", a.name, len(triggerResp.TaskResults))
-	}
+	log.InfoContextf(ctx, "[HTTPPluginAdapter] plugin %s parsed response: task_results=%d", a.name, len(triggerResp.TaskResults))
 
 	return &triggerResp, nil
 }

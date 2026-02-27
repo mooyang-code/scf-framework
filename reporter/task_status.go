@@ -9,7 +9,9 @@ import (
 	"net/http"
 	"time"
 
+	retry "github.com/avast/retry-go"
 	"github.com/mooyang-code/scf-framework/config"
+	"trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
@@ -35,26 +37,30 @@ type reportTaskStatusRequest struct {
 	Result string `json:"result"`
 }
 
-// ReportAsync 异步上报任务状态，不阻塞调用方
+// ReportAsync 异步上报任务状态，不阻塞调用方。
+// 使用 trpc.CloneContext 创建脱离 deadline 但保留日志字段的 context，
+// 避免调用方 context 取消导致上报中断。
 func (r *TaskReporter) ReportAsync(ctx context.Context, taskID string, status int, result string) {
+	log.InfoContextf(ctx, "[TaskReporter] start async report: taskID=%s, status=%d", taskID, status)
+	asyncCtx := trpc.CloneContext(ctx)
 	go func() {
-		if err := r.Report(ctx, taskID, status, result); err != nil {
-			log.ErrorContextf(ctx, "[TaskReporter] async report failed: taskID=%s, error=%v", taskID, err)
+		if err := r.Report(asyncCtx, taskID, status, result); err != nil {
+			log.ErrorContextf(asyncCtx, "[TaskReporter] async report failed: taskID=%s, status=%d, error=%v", taskID, status, err)
 		}
 	}()
 }
 
-// Report 同步上报任务状态，3次重试+指数退避
+// Report 同步上报任务状态，3 次重试 + 指数退避
 func (r *TaskReporter) Report(ctx context.Context, taskID string, status int, result string) error {
 	serverIP, serverPort := r.runtime.GetServerInfo()
 	if serverIP == "" || serverPort <= 0 {
-		log.WarnContextf(ctx, "[TaskReporter] skip report: server info not available")
+		log.WarnContextf(ctx, "[TaskReporter] skip report: server info not available (ip=%q, port=%d)", serverIP, serverPort)
 		return nil
 	}
 
 	nodeID := r.runtime.GetNodeID()
-
 	url := fmt.Sprintf("http://%s:%d/gateway/collectmgr/ReportTaskStatus", serverIP, serverPort)
+
 	reqBody := reportTaskStatusRequest{
 		ID:     taskID,
 		NodeID: nodeID,
@@ -67,47 +73,44 @@ func (r *TaskReporter) Report(ctx context.Context, taskID string, status int, re
 		return fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	var lastErr error
-	const maxRetries = 3
-	backoff := 500 * time.Millisecond
+	log.InfoContextf(ctx, "[TaskReporter] reporting: taskID=%s, nodeID=%s, status=%d, url=%s", taskID, nodeID, status, url)
 
-	for attempt := 0; attempt < maxRetries; attempt++ {
-		if attempt > 0 {
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			case <-time.After(backoff):
+	err = retry.Do(
+		func() error {
+			req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(data))
+			if err != nil {
+				return fmt.Errorf("failed to create request: %w", err)
 			}
-			backoff *= 2
-		}
+			req.Header.Set("Content-Type", "application/json")
 
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(data))
-		if err != nil {
-			lastErr = fmt.Errorf("failed to create request: %w", err)
-			continue
-		}
-		req.Header.Set("Content-Type", "application/json")
+			resp, err := r.client.Do(req)
+			if err != nil {
+				return err
+			}
+			defer resp.Body.Close()
 
-		resp, err := r.client.Do(req)
-		if err != nil {
-			lastErr = fmt.Errorf("request failed: %w", err)
-			log.WarnContextf(ctx, "[TaskReporter] attempt %d/%d failed: taskID=%s, error=%v",
-				attempt+1, maxRetries, taskID, err)
-			continue
-		}
+			if resp.StatusCode != http.StatusOK {
+				body, _ := io.ReadAll(resp.Body)
+				return fmt.Errorf("server returned status %d: %s", resp.StatusCode, string(body))
+			}
 
-		body, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
-
-		if resp.StatusCode == http.StatusOK {
-			log.InfoContextf(ctx, "[TaskReporter] report success: taskID=%s, status=%d", taskID, status)
 			return nil
-		}
+		},
+		retry.Attempts(3),
+		retry.Delay(500*time.Millisecond),
+		retry.DelayType(retry.BackOffDelay),
+		retry.LastErrorOnly(true),
+		retry.OnRetry(func(n uint, err error) {
+			log.WarnContextf(ctx, "[TaskReporter] retrying: taskID=%s, attempt=%d, error=%v", taskID, n+1, err)
+		}),
+		retry.Context(ctx),
+	)
 
-		lastErr = fmt.Errorf("server returned status %d: %s", resp.StatusCode, string(body))
-		log.WarnContextf(ctx, "[TaskReporter] attempt %d/%d failed: taskID=%s, status=%d, body=%s",
-			attempt+1, maxRetries, taskID, resp.StatusCode, string(body))
+	if err != nil {
+		log.ErrorContextf(ctx, "[TaskReporter] report failed after retries: taskID=%s, status=%d, error=%v", taskID, status, err)
+		return err
 	}
 
-	return fmt.Errorf("all %d retries exhausted for taskID=%s: %w", maxRetries, taskID, lastErr)
+	log.InfoContextf(ctx, "[TaskReporter] report success: taskID=%s, status=%d", taskID, status)
+	return nil
 }

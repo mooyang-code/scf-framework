@@ -100,8 +100,9 @@ func (m *Manager) wrapHandler() TriggerHandler {
 		ctx = trpc.CloneContext(ctx)
 
 		// 注入 nodeID/version 到 Metadata（供 Python 插件作为日志上下文）
+		var nodeID, version string
 		if m.runtime != nil {
-			nodeID, version := m.runtime.GetNodeInfo()
+			nodeID, version = m.runtime.GetNodeInfo()
 			if event.Metadata == nil {
 				event.Metadata = make(map[string]string)
 			}
@@ -110,6 +111,8 @@ func (m *Manager) wrapHandler() TriggerHandler {
 		}
 
 		ctx = log.WithContextFields(ctx,
+			"nodeID", nodeID,
+			"version", version,
 			"plugin", m.plugin.Name(),
 			"trigger", event.Name,
 			"trigger_type", string(event.Type),
@@ -142,13 +145,23 @@ func (m *Manager) wrapHandler() TriggerHandler {
 			log.ErrorContextf(ctx, "[TriggerManager] trigger %s failed: %v", event.Name, err)
 		}
 
+		log.InfoContextf(ctx, "[TriggerManager] OnTrigger returned: trigger=%s, hasResp=%v, taskResults=%d, err=%v",
+			event.Name, resp != nil, func() int {
+				if resp != nil {
+					return len(resp.TaskResults)
+				}
+				return 0
+			}(), err)
+
 		// 异步上报任务执行结果
 		if resp != nil && len(resp.TaskResults) > 0 && m.reporter != nil {
+			log.InfoContextf(ctx, "[TriggerManager] dispatching %d task results to reporter", len(resp.TaskResults))
 			for _, tr := range resp.TaskResults {
+				log.InfoContextf(ctx, "[TriggerManager] reporting task result: taskID=%s, status=%d, result=%q",
+					tr.TaskID, tr.Status, tr.Result)
 				m.reporter.ReportAsync(ctx, tr.TaskID, tr.Status, tr.Result)
 			}
 		}
-
 		return err
 	}
 }
