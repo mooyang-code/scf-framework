@@ -124,7 +124,14 @@ func (m *Manager) wrapHandler() TriggerHandler {
 			}
 			if data, err := json.Marshal(snapshot); err == nil {
 				event.Payload = data
+				log.InfoContextf(ctx, "[TriggerManager] payload injected: tasks=%d, md5=%s, payload_len=%d",
+					len(snapshot.Tasks), snapshot.TasksMD5, len(data))
+			} else {
+				log.ErrorContextf(ctx, "[TriggerManager] failed to marshal payload: %v", err)
 			}
+		} else {
+			log.InfoContextf(ctx, "[TriggerManager] payload skip: taskStore=%v, existing_payload_len=%d",
+				m.taskStore != nil, len(event.Payload))
 		}
 
 		log.InfoContextf(ctx, "[TriggerManager] dispatching trigger: name=%s, type=%s, tasks=%d",

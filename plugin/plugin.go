@@ -131,6 +131,14 @@ func (a *HTTPPluginAdapter) OnTrigger(ctx context.Context, event *model.TriggerE
 		return fmt.Errorf("failed to marshal trigger event: %w", err)
 	}
 
+	// 调试日志：打印发送给插件的 payload 片段
+	logData := string(data)
+	if len(logData) > 500 {
+		logData = logData[:500] + "..."
+	}
+	log.InfoContextf(ctx, "[HTTPPluginAdapter] sending to plugin: url=%s, body_len=%d, body=%s",
+		triggerURL, len(data), logData)
+
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, triggerURL, bytes.NewReader(data))
 	if err != nil {
 		return fmt.Errorf("failed to create trigger request: %w", err)
