@@ -43,6 +43,7 @@ class CLSHandler(logging.Handler):
     LEVEL_KEY = "Level"
     MSG_KEY = "Msg"
     CALLER_KEY = "Caller"
+    FUNC_KEY = "func"
     NAME_KEY = "Name"
     STACKTRACE_KEY = "StackTrace"
 
@@ -71,6 +72,17 @@ class CLSHandler(logging.Handler):
         self._config = config
         self._time_format = time_format
         self._producer = AsyncProducer(config)
+        self._context_fields: dict[str, str] = {}
+
+    def set_context_fields(self, **kwargs) -> None:
+        """设置全局上下文字段，会自动注入到每条日志中。
+
+        用法::
+
+            handler.set_context_fields(nodeID="scfxxx-xxx", version="v0.0.8")
+        """
+        for k, v in kwargs.items():
+            self._context_fields[k] = str(v)
 
     @property
     def producer(self) -> AsyncProducer:
@@ -107,8 +119,14 @@ class CLSHandler(logging.Handler):
             self.LEVEL_KEY: record.levelname,
             self.MSG_KEY: msg,
             self.CALLER_KEY: f"{record.filename}:{record.lineno}",
+            self.FUNC_KEY: record.funcName or "",
             self.NAME_KEY: record.name or "",
         }
+
+        # 注入全局上下文字段（nodeID, version 等）
+        for key, value in self._context_fields.items():
+            if key not in fields:
+                fields[key] = value
 
         # 异常堆栈
         if record.exc_info and record.exc_info[0] is not None:

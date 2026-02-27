@@ -17,14 +17,16 @@ type Manager struct {
 	plugin    plugin.Plugin
 	timer     *TimerTrigger
 	taskStore *config.TaskInstanceStore
+	runtime   *config.RuntimeState
 }
 
 // NewManager 创建触发器管理器
-func NewManager(p plugin.Plugin, ts *config.TaskInstanceStore) *Manager {
+func NewManager(p plugin.Plugin, ts *config.TaskInstanceStore, rs *config.RuntimeState) *Manager {
 	return &Manager{
 		plugin:    p,
 		timer:     NewTimerTrigger(),
 		taskStore: ts,
+		runtime:   rs,
 	}
 }
 
@@ -89,6 +91,16 @@ func (m *Manager) Timer() *TimerTrigger {
 // wrapHandler 包装 plugin.OnTrigger 并注入结构化日志字段和 TaskStore 快照
 func (m *Manager) wrapHandler() TriggerHandler {
 	return func(ctx context.Context, event *model.TriggerEvent) error {
+		// 注入 nodeID/version 到 Metadata（供 Python 插件作为日志上下文）
+		if m.runtime != nil {
+			nodeID, version := m.runtime.GetNodeInfo()
+			if event.Metadata == nil {
+				event.Metadata = make(map[string]string)
+			}
+			event.Metadata["nodeID"] = nodeID
+			event.Metadata["version"] = version
+		}
+
 		ctx = log.WithContextFields(ctx,
 			"plugin", m.plugin.Name(),
 			"trigger", event.Name,
@@ -96,20 +108,28 @@ func (m *Manager) wrapHandler() TriggerHandler {
 		)
 
 		// 将 TaskStore 快照注入 TriggerEvent.Payload（供 HTTPPluginAdapter 插件使用）
+		// 始终序列化（即使 tasks 为空），保证插件侧能拿到完整结构
 		if m.taskStore != nil && len(event.Payload) == 0 {
-			tasks := m.taskStore.GetAll()
-			if len(tasks) > 0 {
-				snapshot := &TriggerPayload{
-					Tasks:    tasks,
-					TasksMD5: m.taskStore.GetCurrentMD5(),
-				}
-				if data, err := json.Marshal(snapshot); err == nil {
-					event.Payload = data
-				}
+			snapshot := &TriggerPayload{
+				Tasks:    m.taskStore.GetAll(),
+				TasksMD5: m.taskStore.GetCurrentMD5(),
+			}
+			if snapshot.Tasks == nil {
+				snapshot.Tasks = []*model.TaskInstance{}
+			}
+			if data, err := json.Marshal(snapshot); err == nil {
+				event.Payload = data
 			}
 		}
 
-		return m.plugin.OnTrigger(ctx, event)
+		log.InfoContextf(ctx, "[TriggerManager] dispatching trigger: name=%s, type=%s, tasks=%d",
+			event.Name, event.Type, len(m.taskStore.GetAll()))
+
+		err := m.plugin.OnTrigger(ctx, event)
+		if err != nil {
+			log.ErrorContextf(ctx, "[TriggerManager] trigger %s failed: %v", event.Name, err)
+		}
+		return err
 	}
 }
 

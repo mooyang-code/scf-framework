@@ -114,7 +114,7 @@ func (a *App) Run(ctx context.Context) error {
 	log.InfoContextf(ctx, "heartbeat timer registered on service %q", a.opts.heartbeatServiceName)
 
 	// 8. 初始化 TriggerManager
-	a.triggerMgr = trigger.NewManager(a.plugin, a.taskStore)
+	a.triggerMgr = trigger.NewManager(a.plugin, a.taskStore, a.runtime)
 
 	// 将框架配置中的 triggers 转换为 model.TriggerConfig
 	triggerConfigs := make([]config.TriggerConfig, len(cfg.Triggers))
