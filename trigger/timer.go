@@ -30,13 +30,16 @@ type timerEntry struct {
 
 // TimerTrigger 基于 TRPC Timer 的定时触发器
 type TimerTrigger struct {
-	entries []*timerEntry
-	mu      sync.RWMutex
+	entries  []*timerEntry
+	mu       sync.RWMutex
+	lastTick map[Granularity]time.Time // 每种粒度上次 Tick 的时间
 }
 
 // NewTimerTrigger 创建 TimerTrigger
 func NewTimerTrigger() *TimerTrigger {
-	return &TimerTrigger{}
+	return &TimerTrigger{
+		lastTick: make(map[Granularity]time.Time),
+	}
 }
 
 // AddCron 解析 cron 表达式，推断粒度，添加定时器条目
@@ -60,24 +63,41 @@ func (t *TimerTrigger) AddCron(name, cron string, handler TriggerHandler) error 
 	return nil
 }
 
-// Tick 遍历匹配此粒度的所有条目，检查 cron 匹配，触发 handler
+// Tick 遍历匹配此粒度的所有条目，检查 cron 在 (lastTick, now] 窗口内是否有匹配，触发 handler
 func (t *TimerTrigger) Tick(ctx context.Context, granularity Granularity) error {
-	t.mu.RLock()
+	t.mu.Lock()
 	entries := make([]*timerEntry, len(t.entries))
 	copy(entries, t.entries)
-	t.mu.RUnlock()
 
 	now := time.Now()
+
+	// 获取上次 Tick 时间，首次调用时用 now 减去对应粒度的间隔作为窗口起点
+	windowStart, ok := t.lastTick[granularity]
+	if !ok {
+		switch granularity {
+		case GranularitySecond:
+			windowStart = now.Add(-1 * time.Second)
+		case GranularityMinute:
+			windowStart = now.Add(-1 * time.Minute)
+		case GranularityHour:
+			windowStart = now.Add(-1 * time.Hour)
+		default:
+			windowStart = now.Add(-1 * time.Minute)
+		}
+	}
+	t.lastTick[granularity] = now
+	t.mu.Unlock()
 
 	for _, entry := range entries {
 		if entry.granularity != granularity {
 			continue
 		}
 
-		// 检查当前时刻是否匹配 cron 表达式
-		nextTime := entry.cronExpr.Next(now.Add(-1 * time.Second))
+		// 检查从 windowStart 到 now 之间是否有 cron 匹配时刻
+		// Next(windowStart) 返回 windowStart 之后的第一个匹配时刻
+		nextTime := entry.cronExpr.Next(windowStart)
 		if nextTime.After(now) {
-			continue
+			continue // 窗口内无匹配
 		}
 
 		event := &model.TriggerEvent{
@@ -85,7 +105,7 @@ func (t *TimerTrigger) Tick(ctx context.Context, granularity Granularity) error 
 			Name: entry.name,
 			Metadata: map[string]string{
 				"granularity": string(granularity),
-				"fire_time":   now.Format(time.RFC3339),
+				"fire_time":   nextTime.Format(time.RFC3339),
 			},
 		}
 
