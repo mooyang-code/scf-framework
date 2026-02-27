@@ -8,6 +8,7 @@ import (
 	"github.com/mooyang-code/scf-framework/config"
 	"github.com/mooyang-code/scf-framework/model"
 	"github.com/mooyang-code/scf-framework/plugin"
+	"trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
@@ -91,6 +92,10 @@ func (m *Manager) Timer() *TimerTrigger {
 // wrapHandler 包装 plugin.OnTrigger 并注入结构化日志字段和 TaskStore 快照
 func (m *Manager) wrapHandler() TriggerHandler {
 	return func(ctx context.Context, event *model.TriggerEvent) error {
+		// 创建不继承 deadline 的新 context，避免 TRPC Timer 的超时影响插件执行
+		// 保留 trpc metadata（日志字段等）
+		ctx = trpc.CloneContext(ctx)
+
 		// 注入 nodeID/version 到 Metadata（供 Python 插件作为日志上下文）
 		if m.runtime != nil {
 			nodeID, version := m.runtime.GetNodeInfo()
