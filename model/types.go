@@ -140,6 +140,26 @@ type HeartbeatInfo struct {
 	ServerPort  int       `json:"server_port"`
 }
 
+// ========== 任务执行结果 ==========
+
+// 任务状态常量
+const (
+	TaskStatusSuccess = 2 // 执行成功
+	TaskStatusFailed  = 4 // 执行失败
+)
+
+// TaskResult 插件返回的单个任务执行结果
+type TaskResult struct {
+	TaskID string `json:"task_id"`
+	Status int    `json:"status"` // 2=成功, 4=失败
+	Result string `json:"result"` // 失败原因（成功时为空）
+}
+
+// TriggerResponse 插件对触发事件的响应
+type TriggerResponse struct {
+	TaskResults []TaskResult `json:"task_results,omitempty"`
+}
+
 // ========== 任务实例 ==========
 
 // TaskInstance 通用任务实例

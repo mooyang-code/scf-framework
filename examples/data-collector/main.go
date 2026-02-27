@@ -104,14 +104,14 @@ func (p *DataCollectorPlugin) Init(_ context.Context, fw plugin.Framework) error
 }
 
 // OnTrigger 路由不同触发器事件到对应的处理函数
-func (p *DataCollectorPlugin) OnTrigger(ctx context.Context, event *model.TriggerEvent) error {
+func (p *DataCollectorPlugin) OnTrigger(ctx context.Context, event *model.TriggerEvent) (*model.TriggerResponse, error) {
 	switch event.Name {
 	case "scheduled-collect":
-		return p.executeScheduledCollect(ctx)
+		return nil, p.executeScheduledCollect(ctx)
 	case "dns-refresh":
-		return p.refreshDNS(ctx)
+		return nil, p.refreshDNS(ctx)
 	default:
-		return fmt.Errorf("unknown trigger: %s", event.Name)
+		return nil, fmt.Errorf("unknown trigger: %s", event.Name)
 	}
 }
 

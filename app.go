@@ -14,6 +14,7 @@ import (
 	"github.com/mooyang-code/scf-framework/heartbeat"
 	"github.com/mooyang-code/scf-framework/model"
 	"github.com/mooyang-code/scf-framework/plugin"
+	"github.com/mooyang-code/scf-framework/reporter"
 	"github.com/mooyang-code/scf-framework/trigger"
 	"trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/log"
@@ -113,8 +114,9 @@ func (a *App) Run(ctx context.Context) error {
 	timer.RegisterHandlerService(s.Service(a.opts.heartbeatServiceName), hbReporter.ScheduledHeartbeat)
 	log.InfoContextf(ctx, "heartbeat timer registered on service %q", a.opts.heartbeatServiceName)
 
-	// 8. 初始化 TriggerManager
-	a.triggerMgr = trigger.NewManager(a.plugin, a.taskStore, a.runtime)
+	// 8. 初始化 TaskReporter 和 TriggerManager
+	taskReporter := reporter.NewTaskReporter(a.runtime)
+	a.triggerMgr = trigger.NewManager(a.plugin, a.taskStore, a.runtime, taskReporter)
 
 	// 将框架配置中的 triggers 转换为 model.TriggerConfig
 	triggerConfigs := make([]config.TriggerConfig, len(cfg.Triggers))

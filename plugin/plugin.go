@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"time"
 
@@ -17,7 +18,7 @@ import (
 type Plugin interface {
 	Name() string
 	Init(ctx context.Context, fw Framework) error
-	OnTrigger(ctx context.Context, event *model.TriggerEvent) error
+	OnTrigger(ctx context.Context, event *model.TriggerEvent) (*model.TriggerResponse, error)
 }
 
 // Framework 框架接口，插件通过此接口访问框架能力
@@ -122,13 +123,13 @@ func (a *HTTPPluginAdapter) Init(ctx context.Context, _ Framework) error {
 	return fmt.Errorf("plugin %s not ready after %v", a.name, a.readyTimeout)
 }
 
-// OnTrigger POST /on-trigger 发送 TriggerEvent JSON
-func (a *HTTPPluginAdapter) OnTrigger(ctx context.Context, event *model.TriggerEvent) error {
+// OnTrigger POST /on-trigger 发送 TriggerEvent JSON，解析插件响应中的 TaskResults
+func (a *HTTPPluginAdapter) OnTrigger(ctx context.Context, event *model.TriggerEvent) (*model.TriggerResponse, error) {
 	triggerURL := fmt.Sprintf("%s/on-trigger", a.baseURL)
 
 	data, err := json.Marshal(event)
 	if err != nil {
-		return fmt.Errorf("failed to marshal trigger event: %w", err)
+		return nil, fmt.Errorf("failed to marshal trigger event: %w", err)
 	}
 
 	// 调试日志：打印发送给插件的 payload 片段
@@ -141,21 +142,43 @@ func (a *HTTPPluginAdapter) OnTrigger(ctx context.Context, event *model.TriggerE
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, triggerURL, bytes.NewReader(data))
 	if err != nil {
-		return fmt.Errorf("failed to create trigger request: %w", err)
+		return nil, fmt.Errorf("failed to create trigger request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := a.client.Do(req)
 	if err != nil {
-		return fmt.Errorf("failed to send trigger event to plugin %s: %w", a.name, err)
+		return nil, fmt.Errorf("failed to send trigger event to plugin %s: %w", a.name, err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("plugin %s returned status %d for trigger event", a.name, resp.StatusCode)
+		return nil, fmt.Errorf("plugin %s returned status %d for trigger event", a.name, resp.StatusCode)
 	}
 
-	return nil
+	// 读取并解析响应 body
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		log.WarnContextf(ctx, "[HTTPPluginAdapter] failed to read response body from plugin %s: %v", a.name, err)
+		return nil, nil
+	}
+
+	if len(body) == 0 {
+		return nil, nil
+	}
+
+	var triggerResp model.TriggerResponse
+	if err := json.Unmarshal(body, &triggerResp); err != nil {
+		log.WarnContextf(ctx, "[HTTPPluginAdapter] failed to parse trigger response from plugin %s: %v, body=%s",
+			a.name, err, string(body))
+		return nil, nil
+	}
+
+	if len(triggerResp.TaskResults) > 0 {
+		log.InfoContextf(ctx, "[HTTPPluginAdapter] plugin %s returned %d task results", a.name, len(triggerResp.TaskResults))
+	}
+
+	return &triggerResp, nil
 }
 
 // HeartbeatExtra 返回心跳额外字段（合并静态和动态）

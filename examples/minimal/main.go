@@ -78,7 +78,7 @@ func (p *MyPlugin) Init(_ context.Context, fw plugin.Framework) error {
 	return nil
 }
 
-func (p *MyPlugin) OnTrigger(ctx context.Context, event *model.TriggerEvent) error {
+func (p *MyPlugin) OnTrigger(ctx context.Context, event *model.TriggerEvent) (*model.TriggerResponse, error) {
 	fmt.Printf("[MyPlugin] trigger: type=%s, name=%s\n", event.Type, event.Name)
 
 	// 访问运行时状态
@@ -89,5 +89,5 @@ func (p *MyPlugin) OnTrigger(ctx context.Context, event *model.TriggerEvent) err
 	tasks := p.fw.TaskStore().GetByNode(nodeID)
 	fmt.Printf("[MyPlugin]   tasks=%d, md5=%s\n", len(tasks), p.fw.TaskStore().GetCurrentMD5())
 
-	return nil
+	return nil, nil
 }

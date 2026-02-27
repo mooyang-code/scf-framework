@@ -126,14 +126,14 @@ func (p *FactorPlugin) Init(_ context.Context, fw plugin.Framework) error {
 	return nil
 }
 
-func (p *FactorPlugin) OnTrigger(ctx context.Context, event *model.TriggerEvent) error {
+func (p *FactorPlugin) OnTrigger(ctx context.Context, event *model.TriggerEvent) (*model.TriggerResponse, error) {
 	switch event.Type {
 	case model.TriggerNATS:
-		return p.handleKlineMessage(ctx, event)
+		return nil, p.handleKlineMessage(ctx, event)
 	case model.TriggerTimer:
-		return p.handleTimerTick(ctx, event)
+		return nil, p.handleTimerTick(ctx, event)
 	default:
-		return fmt.Errorf("unknown trigger type: %s", event.Type)
+		return nil, fmt.Errorf("unknown trigger type: %s", event.Type)
 	}
 }
 

@@ -8,6 +8,7 @@ import (
 	"github.com/mooyang-code/scf-framework/config"
 	"github.com/mooyang-code/scf-framework/model"
 	"github.com/mooyang-code/scf-framework/plugin"
+	"github.com/mooyang-code/scf-framework/reporter"
 	"trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/log"
 )
@@ -19,15 +20,17 @@ type Manager struct {
 	timer     *TimerTrigger
 	taskStore *config.TaskInstanceStore
 	runtime   *config.RuntimeState
+	reporter  *reporter.TaskReporter
 }
 
 // NewManager 创建触发器管理器
-func NewManager(p plugin.Plugin, ts *config.TaskInstanceStore, rs *config.RuntimeState) *Manager {
+func NewManager(p plugin.Plugin, ts *config.TaskInstanceStore, rs *config.RuntimeState, tr *reporter.TaskReporter) *Manager {
 	return &Manager{
 		plugin:    p,
 		timer:     NewTimerTrigger(),
 		taskStore: ts,
 		runtime:   rs,
+		reporter:  tr,
 	}
 }
 
@@ -134,10 +137,18 @@ func (m *Manager) wrapHandler() TriggerHandler {
 		log.InfoContextf(ctx, "[TriggerManager] dispatching trigger: name=%s, type=%s, tasks=%d",
 			event.Name, event.Type, len(m.taskStore.GetAll()))
 
-		err := m.plugin.OnTrigger(ctx, event)
+		resp, err := m.plugin.OnTrigger(ctx, event)
 		if err != nil {
 			log.ErrorContextf(ctx, "[TriggerManager] trigger %s failed: %v", event.Name, err)
 		}
+
+		// 异步上报任务执行结果
+		if resp != nil && len(resp.TaskResults) > 0 && m.reporter != nil {
+			for _, tr := range resp.TaskResults {
+				m.reporter.ReportAsync(ctx, tr.TaskID, tr.Status, tr.Result)
+			}
+		}
+
 		return err
 	}
 }
