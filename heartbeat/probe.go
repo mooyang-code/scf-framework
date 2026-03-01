@@ -48,12 +48,17 @@ func (h *ProbeHandler) ProcessProbe(ctx context.Context, event model.CloudFuncti
 	}
 
 	// 更新服务端连接信息
-	if event.ServerIP != "" && event.ServerPort > 0 {
-		log.DebugContextf(ctx, "[ProcessProbe] 更新服务端地址 %s:%d", event.ServerIP, event.ServerPort)
-		h.runtime.UpdateServerInfo(event.ServerIP, event.ServerPort)
+	if event.MooxServerURL != "" {
+		log.DebugContextf(ctx, "[ProcessProbe] 更新 Moox Server 地址 %s", event.MooxServerURL)
+		h.runtime.UpdateMooxServerURL(event.MooxServerURL)
 	} else {
-		log.WarnContextf(ctx, "[ProcessProbe] 服务端地址信息缺失 ServerIP=%s, ServerPort=%d",
-			event.ServerIP, event.ServerPort)
+		log.WarnContextf(ctx, "[ProcessProbe] Moox Server 地址信息缺失")
+	}
+
+	// 更新存储服务地址
+	if event.StorageServerURL != "" {
+		log.DebugContextf(ctx, "[ProcessProbe] 更新存储服务地址 %s", event.StorageServerURL)
+		h.runtime.UpdateStorageServerURL(event.StorageServerURL)
 	}
 
 	// 构建探测响应
@@ -80,7 +85,7 @@ func (h *ProbeHandler) buildProbeResponse() (*model.ProbeResponse, error) {
 		return nil, fmt.Errorf("node ID is empty")
 	}
 
-	serverIP, serverPort := h.runtime.GetServerInfo()
+	serverURL := h.runtime.GetMooxServerURL()
 
 	var memStats runtime.MemStats
 	runtime.ReadMemStats(&memStats)
@@ -116,10 +121,9 @@ func (h *ProbeHandler) buildProbeResponse() (*model.ProbeResponse, error) {
 				NumGoroutine: runtime.NumGoroutine(),
 			},
 			HeartbeatInfo: model.HeartbeatInfo{
-				LastReport: time.Now(),
-				Interval:   "30s",
-				ServerIP:   serverIP,
-				ServerPort: serverPort,
+				LastReport:    time.Now(),
+				Interval:      "30s",
+				MooxServerURL: serverURL,
 			},
 		},
 	}, nil

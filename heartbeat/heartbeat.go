@@ -12,6 +12,7 @@ import (
 
 	"github.com/avast/retry-go"
 	"github.com/mooyang-code/scf-framework/config"
+	"github.com/mooyang-code/scf-framework/dnsproxy"
 	"github.com/mooyang-code/scf-framework/model"
 	"github.com/mooyang-code/scf-framework/plugin"
 	"trpc.group/trpc-go/trpc-go"
@@ -20,19 +21,21 @@ import (
 
 // Reporter 心跳上报器
 type Reporter struct {
-	runtime   *config.RuntimeState
-	taskStore *config.TaskInstanceStore
-	plugin    plugin.Plugin
-	client    *http.Client
+	runtime     *config.RuntimeState
+	taskStore   *config.TaskInstanceStore
+	plugin      plugin.Plugin
+	client      *http.Client
+	dnsResolver *dnsproxy.Resolver
 }
 
 // NewReporter 创建心跳上报器
-func NewReporter(rs *config.RuntimeState, ts *config.TaskInstanceStore, p plugin.Plugin) *Reporter {
+func NewReporter(rs *config.RuntimeState, ts *config.TaskInstanceStore, p plugin.Plugin, dr *dnsproxy.Resolver) *Reporter {
 	return &Reporter{
-		runtime:   rs,
-		taskStore: ts,
-		plugin:    p,
-		client:    &http.Client{Timeout: 5 * time.Second},
+		runtime:     rs,
+		taskStore:   ts,
+		plugin:      p,
+		client:      &http.Client{Timeout: 5 * time.Second},
+		dnsResolver: dr,
 	}
 }
 
@@ -53,23 +56,23 @@ func (r *Reporter) ScheduledHeartbeat(c context.Context, _ string) error {
 
 // Report 执行心跳上报
 func (r *Reporter) Report(ctx context.Context) error {
-	serverIP, serverPort := r.runtime.GetServerInfo()
+	mooxServerURL := r.runtime.GetMooxServerURL()
 	nodeID, localVersion := r.runtime.GetNodeInfo()
 
-	log.DebugContextf(ctx, "ReportHeartbeat: serverIP=%s:%d, nodeID=%s, version=%s",
-		serverIP, serverPort, nodeID, localVersion)
+	log.DebugContextf(ctx, "ReportHeartbeat: mooxServerURL=%s, nodeID=%s, version=%s",
+		mooxServerURL, nodeID, localVersion)
 
 	if nodeID == "" {
 		log.WarnContextf(ctx, "NodeID 为空，跳过心跳上报")
 		return nil
 	}
-	if serverIP == "" {
-		log.WarnContextf(ctx, "服务端 IP 未配置，跳过心跳上报")
+	if mooxServerURL == "" {
+		log.WarnContextf(ctx, "Moox Server URL 未配置，跳过心跳上报")
 		return nil
 	}
 
 	payload := r.buildPayload()
-	packageVersion, err := r.sendToServer(ctx, payload, serverIP, serverPort)
+	packageVersion, err := r.sendToServer(ctx, payload, mooxServerURL)
 	if err != nil {
 		log.ErrorContextf(ctx, "failed to send heartbeat: %v", err)
 		return fmt.Errorf("failed to send heartbeat: %w", err)
@@ -118,16 +121,24 @@ func (r *Reporter) buildPayload() map[string]interface{} {
 		}
 	}
 
+	// 注入本地 DNS 解析记录
+	if r.dnsResolver != nil {
+		items := r.dnsResolver.GetDNSReportItems()
+		if len(items) > 0 {
+			payload["local_dns_records"] = items
+		}
+	}
+
 	return payload
 }
 
 // sendToServer POST 心跳数据到服务端，retry-go 5 次 BackOff
-func (r *Reporter) sendToServer(ctx context.Context, payload map[string]interface{}, serverIP string, serverPort int) (string, error) {
-	if serverIP == "" || serverPort <= 0 {
-		return "", fmt.Errorf("invalid server address: %s:%d", serverIP, serverPort)
+func (r *Reporter) sendToServer(ctx context.Context, payload map[string]interface{}, mooxServerURL string) (string, error) {
+	if mooxServerURL == "" {
+		return "", fmt.Errorf("moox server URL is empty")
 	}
 
-	url := fmt.Sprintf("http://%s:%d/gateway/cloudnode/ReportHeartbeatInner", serverIP, serverPort)
+	url := mooxServerURL + "/gateway/cloudnode/ReportHeartbeatInner"
 
 	data, err := json.Marshal(payload)
 	if err != nil {

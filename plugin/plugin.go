@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/scf-framework/config"
+	"github.com/mooyang-code/scf-framework/dnsproxy"
 	"github.com/mooyang-code/scf-framework/model"
 	"trpc.group/trpc-go/trpc-go/log"
 )
@@ -26,6 +27,7 @@ type Framework interface {
 	Config() *config.FrameworkConfig
 	Runtime() *config.RuntimeState
 	TaskStore() *config.TaskInstanceStore
+	DNSResolver() *dnsproxy.Resolver // 无配置时返回 nil
 }
 
 // HeartbeatContributor 可选接口，插件可实现此接口向心跳负载注入额外字段

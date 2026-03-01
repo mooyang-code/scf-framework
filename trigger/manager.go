@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/mooyang-code/scf-framework/config"
+	"github.com/mooyang-code/scf-framework/dnsproxy"
 	"github.com/mooyang-code/scf-framework/model"
 	"github.com/mooyang-code/scf-framework/plugin"
 	"github.com/mooyang-code/scf-framework/reporter"
@@ -15,22 +17,24 @@ import (
 
 // Manager 管理所有触发器的生命周期
 type Manager struct {
-	triggers  []Trigger
-	plugin    plugin.Plugin
-	timer     *TimerTrigger
-	taskStore *config.TaskInstanceStore
-	runtime   *config.RuntimeState
-	reporter  *reporter.TaskReporter
+	triggers    []Trigger
+	plugin      plugin.Plugin
+	timer       *TimerTrigger
+	taskStore   *config.TaskInstanceStore
+	runtime     *config.RuntimeState
+	reporter    *reporter.TaskReporter
+	dnsResolver *dnsproxy.Resolver
 }
 
 // NewManager 创建触发器管理器
-func NewManager(p plugin.Plugin, ts *config.TaskInstanceStore, rs *config.RuntimeState, tr *reporter.TaskReporter) *Manager {
+func NewManager(p plugin.Plugin, ts *config.TaskInstanceStore, rs *config.RuntimeState, tr *reporter.TaskReporter, dr *dnsproxy.Resolver) *Manager {
 	return &Manager{
-		plugin:    p,
-		timer:     NewTimerTrigger(),
-		taskStore: ts,
-		runtime:   rs,
-		reporter:  tr,
+		plugin:      p,
+		timer:       NewTimerTrigger(),
+		taskStore:   ts,
+		runtime:     rs,
+		reporter:    tr,
+		dnsResolver: dr,
 	}
 }
 
@@ -99,7 +103,7 @@ func (m *Manager) wrapHandler() TriggerHandler {
 		// 保留 trpc metadata（日志字段等）
 		ctx = trpc.CloneContext(ctx)
 
-		// 注入 nodeID/version 到 Metadata（供 Python 插件作为日志上下文）
+		// 注入 nodeID/version/storage_server_url 到 Metadata（供 Python 插件作为日志上下文和配置）
 		var nodeID, version string
 		if m.runtime != nil {
 			nodeID, version = m.runtime.GetNodeInfo()
@@ -108,6 +112,20 @@ func (m *Manager) wrapHandler() TriggerHandler {
 			}
 			event.Metadata["nodeID"] = nodeID
 			event.Metadata["version"] = version
+			event.Metadata["storage_server_url"] = m.runtime.GetStorageServerURL()
+		}
+
+		// 注入 DNS 解析结果到 metadata（类似 storage_server_url）
+		if m.dnsResolver != nil {
+			records := m.dnsResolver.GetAllRecords()
+			if len(records) > 0 {
+				if dnsJSON, err := json.Marshal(records); err == nil {
+					if event.Metadata == nil {
+						event.Metadata = make(map[string]string)
+					}
+					event.Metadata["dns_records"] = string(dnsJSON)
+				}
+			}
 		}
 
 		ctx = log.WithContextFields(ctx,
@@ -121,17 +139,31 @@ func (m *Manager) wrapHandler() TriggerHandler {
 		// 将 TaskStore 快照注入 TriggerEvent.Payload（供 HTTPPluginAdapter 插件使用）
 		// 每次触发都从 TaskStore 读取最新快照
 		if m.taskStore != nil {
+			tasks := m.taskStore.GetAll()
+			if tasks == nil {
+				tasks = []*model.TaskInstance{}
+			}
+
 			snapshot := &TriggerPayload{
-				Tasks:    m.taskStore.GetAll(),
+				Tasks:    tasks,
 				TasksMD5: m.taskStore.GetCurrentMD5(),
 			}
-			if snapshot.Tasks == nil {
-				snapshot.Tasks = []*model.TaskInstance{}
+
+			// 对 timer 类型触发器执行框架调度筛选
+			if event.Type == model.TriggerTimer {
+				jobs := FilterTaskJobs(tasks, time.Now().UTC())
+				if len(jobs) == 0 {
+					log.InfoContextf(ctx, "[TriggerManager] no jobs to execute, skipping trigger %s", event.Name)
+					return nil
+				}
+				snapshot.Jobs = jobs
+				log.InfoContextf(ctx, "[TriggerManager] scheduled execute: %d jobs for trigger %s", len(jobs), event.Name)
 			}
+
 			if data, err := json.Marshal(snapshot); err == nil {
 				event.Payload = data
-				log.InfoContextf(ctx, "[TriggerManager] payload injected: tasks=%d, md5=%s, payload_len=%d",
-					len(snapshot.Tasks), snapshot.TasksMD5, len(data))
+				log.InfoContextf(ctx, "[TriggerManager] payload injected: tasks=%d, jobs=%d, md5=%s, payload_len=%d",
+					len(snapshot.Tasks), len(snapshot.Jobs), snapshot.TasksMD5, len(data))
 			} else {
 				log.ErrorContextf(ctx, "[TriggerManager] failed to marshal payload: %v", err)
 			}
@@ -170,4 +202,5 @@ func (m *Manager) wrapHandler() TriggerHandler {
 type TriggerPayload struct {
 	Tasks    []*model.TaskInstance `json:"tasks"`
 	TasksMD5 string                `json:"tasks_md5"`
+	Jobs     []model.TaskJob       `json:"jobs,omitempty"`
 }

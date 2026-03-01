@@ -52,14 +52,14 @@ func (r *TaskReporter) ReportAsync(ctx context.Context, taskID string, status in
 
 // Report 同步上报任务状态，3 次重试 + 指数退避
 func (r *TaskReporter) Report(ctx context.Context, taskID string, status int, result string) error {
-	serverIP, serverPort := r.runtime.GetServerInfo()
-	if serverIP == "" || serverPort <= 0 {
-		log.WarnContextf(ctx, "[TaskReporter] skip report: server info not available (ip=%q, port=%d)", serverIP, serverPort)
+	mooxServerURL := r.runtime.GetMooxServerURL()
+	if mooxServerURL == "" {
+		log.WarnContextf(ctx, "[TaskReporter] skip report: moox server URL not available")
 		return nil
 	}
 
 	nodeID := r.runtime.GetNodeID()
-	url := fmt.Sprintf("http://%s:%d/gateway/collectmgr/ReportTaskStatus", serverIP, serverPort)
+	url := mooxServerURL + "/gateway/collectmgr/ReportTaskStatus"
 
 	reqBody := reportTaskStatusRequest{
 		ID:     taskID,

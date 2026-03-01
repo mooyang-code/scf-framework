@@ -35,13 +35,13 @@ type TriggerConfig struct {
 
 // CloudFunctionEvent 云函数事件（Web 函数版本，通过 HTTP 接收）
 type CloudFunctionEvent struct {
-	Action     string                 `json:"action"`
-	Source     string                 `json:"source,omitempty"`
-	Data       map[string]interface{} `json:"data,omitempty"`
-	RequestID  string                 `json:"request_id,omitempty"`
-	Timestamp  string                 `json:"timestamp,omitempty"`
-	ServerIP   string                 `json:"server_ip,omitempty"`
-	ServerPort int                    `json:"server_port,omitempty"`
+	Action           string                 `json:"action"`
+	Source           string                 `json:"source,omitempty"`
+	Data             map[string]interface{} `json:"data,omitempty"`
+	RequestID        string                 `json:"request_id,omitempty"`
+	Timestamp        string                 `json:"timestamp,omitempty"`
+	MooxServerURL    string                 `json:"moox_server_url,omitempty"`
+	StorageServerURL string                 `json:"storage_server_url,omitempty"`
 }
 
 // HeartbeatPayload 心跳上报负载（业务特有字段通过 HeartbeatContributor 注入）
@@ -132,12 +132,11 @@ type SystemInfo struct {
 
 // HeartbeatInfo 心跳信息
 type HeartbeatInfo struct {
-	LastReport  time.Time `json:"last_report"`
-	ReportCount int64     `json:"report_count"`
-	ErrorCount  int64     `json:"error_count"`
-	Interval    string    `json:"interval"`
-	ServerIP    string    `json:"server_ip"`
-	ServerPort  int       `json:"server_port"`
+	LastReport    time.Time `json:"last_report"`
+	ReportCount   int64     `json:"report_count"`
+	ErrorCount    int64     `json:"error_count"`
+	Interval      string    `json:"interval"`
+	MooxServerURL string    `json:"moox_server_url"`
 }
 
 // ========== 任务执行结果 ==========
@@ -171,6 +170,14 @@ type TaskInstance struct {
 	TaskParams string                 `json:"task_params"`
 	Invalid    int                    `json:"invalid"`
 	Extra      map[string]interface{} `json:"extra,omitempty"`
+}
+
+// ========== 框架调度 ==========
+
+// TaskJob 框架筛选出的单个待执行任务单元
+type TaskJob struct {
+	Task     *TaskInstance `json:"task"`
+	Interval string        `json:"interval"`
 }
 
 // ========== 服务端响应 ==========

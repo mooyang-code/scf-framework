@@ -357,11 +357,8 @@ system:
   name: "my-function"          # 函数名称
   version: "v1.0.0"           # 版本号（与服务端 package_version 比对）
   env: "production"            # 环境标识
-  storage_url: "http://..."    # 存储服务地址
 
 heartbeat:
-  server_ip: ""                # 服务端 IP（通常由 probe 动态注入）
-  server_port: 0               # 服务端端口（通常由 probe 动态注入）
   interval: 9                  # 心跳间隔（秒），对应 TRPC Timer 配置
 
 triggers:

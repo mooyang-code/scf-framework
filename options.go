@@ -7,6 +7,7 @@ type options struct {
 	configPath           string
 	gatewayServiceName   string
 	heartbeatServiceName string
+	dnsTimerService      string
 	timerSecondService   string
 	timerMinuteService   string
 	timerHourService     string
@@ -17,6 +18,7 @@ func defaultOptions() *options {
 	return &options{
 		configPath:           "./config.yaml",
 		heartbeatServiceName: "trpc.heartbeat.timer",
+		dnsTimerService:      "trpc.dns.timer",
 		timerSecondService:   "trpc.timer.second",
 		timerMinuteService:   "trpc.timer.minute",
 		timerHourService:     "trpc.timer.hour",

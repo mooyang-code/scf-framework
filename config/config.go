@@ -4,30 +4,29 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/mooyang-code/scf-framework/dnsproxy"
 	"gopkg.in/yaml.v3"
 )
 
 // FrameworkConfig 框架配置（从 YAML 文件加载）
 type FrameworkConfig struct {
-	System    SystemConfig    `yaml:"system"`
-	Heartbeat HeartbeatConfig `yaml:"heartbeat"`
-	Triggers  []TriggerConfig `yaml:"triggers"`
-	Plugin    yaml.Node       `yaml:"plugin"` // 延迟解析，留给插件
+	System    SystemConfig     `yaml:"system"`
+	Heartbeat HeartbeatConfig  `yaml:"heartbeat"`
+	Triggers  []TriggerConfig  `yaml:"triggers"`
+	DNSProxy  *dnsproxy.Config `yaml:"dns_proxy,omitempty"` // DNS 代理配置，可选
+	Plugin    yaml.Node        `yaml:"plugin"`              // 延迟解析，留给插件
 }
 
 // SystemConfig 系统配置
 type SystemConfig struct {
-	Name       string `yaml:"name"`
-	Version    string `yaml:"version"`
-	Env        string `yaml:"env"`
-	StorageURL string `yaml:"storage_url"`
+	Name    string `yaml:"name"`
+	Version string `yaml:"version"`
+	Env     string `yaml:"env"`
 }
 
 // HeartbeatConfig 心跳配置
 type HeartbeatConfig struct {
-	ServerIP   string `yaml:"server_ip"`
-	ServerPort int    `yaml:"server_port"`
-	Interval   int    `yaml:"interval"`
+	Interval int `yaml:"interval"`
 }
 
 // TriggerConfig 触发器配置

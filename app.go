@@ -10,6 +10,7 @@ import (
 
 	"github.com/mooyang-code/go-commlib/trpc-database/timer"
 	"github.com/mooyang-code/scf-framework/config"
+	"github.com/mooyang-code/scf-framework/dnsproxy"
 	"github.com/mooyang-code/scf-framework/gateway"
 	"github.com/mooyang-code/scf-framework/heartbeat"
 	"github.com/mooyang-code/scf-framework/model"
@@ -22,13 +23,14 @@ import (
 
 // App SCF 框架主应用
 type App struct {
-	opts       *options
-	cfg        *config.FrameworkConfig
-	runtime    *config.RuntimeState
-	taskStore  *config.TaskInstanceStore
-	plugin     plugin.Plugin
-	triggerMgr *trigger.Manager
-	gw         *gateway.Gateway
+	opts        *options
+	cfg         *config.FrameworkConfig
+	runtime     *config.RuntimeState
+	taskStore   *config.TaskInstanceStore
+	plugin      plugin.Plugin
+	triggerMgr  *trigger.Manager
+	gw          *gateway.Gateway
+	dnsResolver *dnsproxy.Resolver
 }
 
 // New 创建 App 实例
@@ -58,6 +60,11 @@ func (a *App) TaskStore() *config.TaskInstanceStore {
 	return a.taskStore
 }
 
+// DNSResolver 返回 DNS 解析器（实现 plugin.Framework 接口，无配置时返回 nil）
+func (a *App) DNSResolver() *dnsproxy.Resolver {
+	return a.dnsResolver
+}
+
 // Run 启动应用
 func (a *App) Run(ctx context.Context) error {
 	// 1. 加载配置
@@ -82,6 +89,16 @@ func (a *App) Run(ctx context.Context) error {
 		return fmt.Errorf("failed to init plugin %q: %w", a.plugin.Name(), err)
 	}
 	log.InfoContextf(ctx, "plugin %q initialized", a.plugin.Name())
+
+	// 5.5 初始化 DNS Resolver（如配置了 dns_proxy）
+	if cfg.DNSProxy != nil && len(cfg.DNSProxy.ScheduledDomains) > 0 {
+		a.dnsResolver = dnsproxy.NewResolver(cfg.DNSProxy, a.runtime.GetMooxServerURL)
+		// 启动时立即执行一次解析（非致命错误）
+		if err := a.dnsResolver.Resolve(ctx); err != nil {
+			log.WarnContextf(ctx, "initial DNS resolve failed (non-fatal): %v", err)
+		}
+		log.InfoContextf(ctx, "DNS resolver initialized: domains=%v", cfg.DNSProxy.ScheduledDomains)
+	}
 
 	// 6. 注册 HTTP Gateway（如启用）
 	if a.opts.enableGateway {
@@ -109,14 +126,29 @@ func (a *App) Run(ctx context.Context) error {
 	}
 
 	// 7. 注册心跳 TRPC Timer
-	hbReporter := heartbeat.NewReporter(a.runtime, a.taskStore, a.plugin)
+	hbReporter := heartbeat.NewReporter(a.runtime, a.taskStore, a.plugin, a.dnsResolver)
 	timer.RegisterScheduler("heartbeatSchedule", &timer.DefaultScheduler{})
 	timer.RegisterHandlerService(s.Service(a.opts.heartbeatServiceName), hbReporter.ScheduledHeartbeat)
 	log.InfoContextf(ctx, "heartbeat timer registered on service %q", a.opts.heartbeatServiceName)
 
+	// 7.5 注册 DNS 刷新 TRPC Timer（同心跳模式）
+	timer.RegisterScheduler("dnsRefreshSchedule", &timer.DefaultScheduler{})
+	dnsSvc := s.Service(a.opts.dnsTimerService)
+	if dnsSvc != nil {
+		if a.dnsResolver != nil {
+			timer.RegisterHandlerService(dnsSvc, a.dnsResolver.ScheduledResolve)
+		} else {
+			// 无配置，注册空 handler 避免 "invalid scheduler" 错误
+			timer.RegisterHandlerService(dnsSvc, func(ctx context.Context, _ string) error {
+				return nil
+			})
+		}
+		log.InfoContextf(ctx, "DNS refresh timer registered on service %q", a.opts.dnsTimerService)
+	}
+
 	// 8. 初始化 TaskReporter 和 TriggerManager
 	taskReporter := reporter.NewTaskReporter(a.runtime)
-	a.triggerMgr = trigger.NewManager(a.plugin, a.taskStore, a.runtime, taskReporter)
+	a.triggerMgr = trigger.NewManager(a.plugin, a.taskStore, a.runtime, taskReporter, a.dnsResolver)
 
 	// 将框架配置中的 triggers 转换为 model.TriggerConfig
 	triggerConfigs := make([]config.TriggerConfig, len(cfg.Triggers))

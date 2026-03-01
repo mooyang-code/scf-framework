@@ -7,21 +7,18 @@ import (
 
 // RuntimeState 运行时状态管理
 type RuntimeState struct {
-	mu         sync.RWMutex
-	nodeID     string
-	version    string
-	serverIP   string
-	serverPort int
+	mu               sync.RWMutex
+	nodeID           string
+	version          string
+	mooxServerURL    string // Moox Server 网关地址（由探测报文下发）
+	storageServerURL string // xData 存储服务地址（由探测报文下发）
 }
 
 // NewRuntimeState 从配置初始化运行时状态
 func NewRuntimeState(cfg *FrameworkConfig) *RuntimeState {
-	rs := &RuntimeState{
-		version:    cfg.System.Version,
-		serverIP:   cfg.Heartbeat.ServerIP,
-		serverPort: cfg.Heartbeat.ServerPort,
+	return &RuntimeState{
+		version: cfg.System.Version,
 	}
-	return rs
 }
 
 // InitNodeIDFromEnv 从 SCF 环境变量读取 NodeID
@@ -67,21 +64,34 @@ func (rs *RuntimeState) UpdateNodeInfo(nodeID, version string) {
 	rs.version = version
 }
 
-// GetServerInfo 获取服务端地址
-func (rs *RuntimeState) GetServerInfo() (ip string, port int) {
+// GetMooxServerURL 获取 Moox Server 网关地址
+func (rs *RuntimeState) GetMooxServerURL() string {
 	rs.mu.RLock()
 	defer rs.mu.RUnlock()
-	return rs.serverIP, rs.serverPort
+	return rs.mooxServerURL
 }
 
-// UpdateServerInfo 更新服务端地址
-func (rs *RuntimeState) UpdateServerInfo(ip string, port int) {
+// UpdateMooxServerURL 更新 Moox Server 网关地址
+func (rs *RuntimeState) UpdateMooxServerURL(url string) {
 	rs.mu.Lock()
 	defer rs.mu.Unlock()
-	if ip != "" {
-		rs.serverIP = ip
+	if url != "" {
+		rs.mooxServerURL = url
 	}
-	if port > 0 {
-		rs.serverPort = port
+}
+
+// GetStorageServerURL 获取 xData 存储服务地址
+func (rs *RuntimeState) GetStorageServerURL() string {
+	rs.mu.RLock()
+	defer rs.mu.RUnlock()
+	return rs.storageServerURL
+}
+
+// UpdateStorageServerURL 更新 xData 存储服务地址
+func (rs *RuntimeState) UpdateStorageServerURL(url string) {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	if url != "" {
+		rs.storageServerURL = url
 	}
 }

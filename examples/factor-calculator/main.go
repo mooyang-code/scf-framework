@@ -15,10 +15,7 @@
 //	  name: "factor-calculator"
 //	  version: "v0.1.0"
 //	  env: "production"
-//	  storage_url: "http://43.136.59.72:19104"
 //	heartbeat:
-//	  server_ip: "10.0.0.1"
-//	  server_port: 8080
 //	  interval: 9
 //	triggers:
 //	  - name: "kline-consumer"

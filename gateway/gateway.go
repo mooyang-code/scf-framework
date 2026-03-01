@@ -80,8 +80,8 @@ func (g *Gateway) handleProbe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.InfoContextf(ctx, "收到探测请求: source=%s, serverIP=%s, serverPort=%d",
-		event.Source, event.ServerIP, event.ServerPort)
+	log.InfoContextf(ctx, "收到探测请求: source=%s, mooxServerURL=%s",
+		event.Source, event.MooxServerURL)
 
 	resp, err := g.probeHandler.ProcessProbe(ctx, event)
 	if err != nil {
