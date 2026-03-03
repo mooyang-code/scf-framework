@@ -22,6 +22,9 @@ type TriggerEvent struct {
 	Name     string            `json:"name"`
 	Payload  json.RawMessage   `json:"payload,omitempty"`
 	Metadata map[string]string `json:"metadata,omitempty"`
+	Tasks    []*TaskInstance   `json:"tasks,omitempty"`
+	TasksMD5 string            `json:"tasks_md5,omitempty"`
+	Jobs     []TaskJob         `json:"jobs,omitempty"`
 }
 
 // TriggerConfig 触发器配置（从 YAML 解析）
@@ -156,7 +159,42 @@ type TaskResult struct {
 
 // TriggerResponse 插件对触发事件的响应
 type TriggerResponse struct {
-	TaskResults []TaskResult `json:"task_results,omitempty"`
+	TaskResults []TaskResult    `json:"task_results,omitempty"`
+	DataPoints  []DataPoint     `json:"data_points,omitempty"`
+	WriteConfig *StorageWriteCfg `json:"write_config,omitempty"`
+}
+
+// ========== 存储相关 ==========
+
+// DataPoint 通用数据点（插件返回，框架统一写入 xData）
+type DataPoint struct {
+	Times    string                `json:"times"`
+	ObjectID string               `json:"object_id"`
+	Fields   map[string]FieldValue `json:"fields"`
+}
+
+// FieldValue 字段值（支持 String/Int/Float）
+type FieldValue struct {
+	Type  int      `json:"type"`            // 1=String, 2=Int, 3=Float
+	Str   *string  `json:"str,omitempty"`
+	Int   *int64   `json:"int,omitempty"`
+	Float *float64 `json:"float,omitempty"`
+}
+
+// StorageWriteCfg 存储写入配置
+type StorageWriteCfg struct {
+	DatasetID int    `json:"dataset_id"`
+	WriteMode string `json:"write_mode,omitempty"` // "upsert" 或 "append"，默认 "upsert"
+}
+
+// StorageReadCfg 存储读取配置
+type StorageReadCfg struct {
+	DatasetID int      `json:"dataset_id"`
+	ObjectIDs []string `json:"object_ids,omitempty"`
+	FieldKeys []string `json:"field_keys,omitempty"`
+	StartTime string   `json:"start_time,omitempty"`
+	EndTime   string   `json:"end_time,omitempty"`
+	Limit     int      `json:"limit,omitempty"`
 }
 
 // ========== 任务实例 ==========

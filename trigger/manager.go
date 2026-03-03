@@ -11,30 +11,35 @@ import (
 	"github.com/mooyang-code/scf-framework/model"
 	"github.com/mooyang-code/scf-framework/plugin"
 	"github.com/mooyang-code/scf-framework/reporter"
+	"github.com/mooyang-code/scf-framework/storage"
 	"trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
 // Manager 管理所有触发器的生命周期
 type Manager struct {
-	triggers    []Trigger
-	plugin      plugin.Plugin
-	timer       *TimerTrigger
-	taskStore   *config.TaskInstanceStore
-	runtime     *config.RuntimeState
-	reporter    *reporter.TaskReporter
-	dnsResolver *dnsproxy.Resolver
+	triggers      []Trigger
+	plugin        plugin.Plugin
+	timer         *TimerTrigger
+	taskStore     *config.TaskInstanceStore
+	runtime       *config.RuntimeState
+	reporter      *reporter.TaskReporter
+	dnsResolver   *dnsproxy.Resolver
+	storageWriter *storage.Writer
+	storageReader *storage.Reader
 }
 
 // NewManager 创建触发器管理器
-func NewManager(p plugin.Plugin, ts *config.TaskInstanceStore, rs *config.RuntimeState, tr *reporter.TaskReporter, dr *dnsproxy.Resolver) *Manager {
+func NewManager(p plugin.Plugin, ts *config.TaskInstanceStore, rs *config.RuntimeState, tr *reporter.TaskReporter, dr *dnsproxy.Resolver, sw *storage.Writer, sr *storage.Reader) *Manager {
 	return &Manager{
-		plugin:      p,
-		timer:       NewTimerTrigger(),
-		taskStore:   ts,
-		runtime:     rs,
-		reporter:    tr,
-		dnsResolver: dr,
+		plugin:        p,
+		timer:         NewTimerTrigger(),
+		taskStore:     ts,
+		runtime:       rs,
+		reporter:      tr,
+		dnsResolver:   dr,
+		storageWriter: sw,
+		storageReader: sr,
 	}
 }
 
@@ -56,6 +61,9 @@ func (m *Manager) Init(ctx context.Context, configs []model.TriggerConfig) error
 
 		case string(model.TriggerNATS):
 			t := NewNATSTrigger(cfg.Name)
+			if m.storageReader != nil {
+				t.SetStorageReader(m.storageReader)
+			}
 			if err := t.Init(ctx, cfg); err != nil {
 				return fmt.Errorf("failed to init NATS trigger %q: %w", cfg.Name, err)
 			}
@@ -136,18 +144,17 @@ func (m *Manager) wrapHandler() TriggerHandler {
 			"trigger_type", string(event.Type),
 		)
 
-		// 将 TaskStore 快照注入 TriggerEvent.Payload（供 HTTPPluginAdapter 插件使用）
-		// 每次触发都从 TaskStore 读取最新快照
+		// 注入 TaskStore 快照到 TriggerEvent
 		if m.taskStore != nil {
 			tasks := m.taskStore.GetAll()
 			if tasks == nil {
 				tasks = []*model.TaskInstance{}
 			}
+			tasksMD5 := m.taskStore.GetCurrentMD5()
 
-			snapshot := &TriggerPayload{
-				Tasks:    tasks,
-				TasksMD5: m.taskStore.GetCurrentMD5(),
-			}
+			// 始终设置 TriggerEvent 的 Tasks/TasksMD5 字段
+			event.Tasks = tasks
+			event.TasksMD5 = tasksMD5
 
 			// 对 timer 类型触发器执行框架调度筛选
 			if event.Type == model.TriggerTimer {
@@ -156,31 +163,42 @@ func (m *Manager) wrapHandler() TriggerHandler {
 					log.InfoContextf(ctx, "[TriggerManager] no jobs to execute, skipping trigger %s", event.Name)
 					return nil
 				}
-				snapshot.Jobs = jobs
+				event.Jobs = jobs
 				log.InfoContextf(ctx, "[TriggerManager] scheduled execute: %d jobs for trigger %s", len(jobs), event.Name)
-			}
 
-			if data, err := json.Marshal(snapshot); err == nil {
-				event.Payload = data
-				log.InfoContextf(ctx, "[TriggerManager] payload injected: tasks=%d, jobs=%d, md5=%s, payload_len=%d",
-					len(snapshot.Tasks), len(snapshot.Jobs), snapshot.TasksMD5, len(data))
-			} else {
-				log.ErrorContextf(ctx, "[TriggerManager] failed to marshal payload: %v", err)
+				// timer 触发器：同时设置 Payload 保持兼容
+				snapshot := &TriggerPayload{
+					Tasks:    tasks,
+					TasksMD5: tasksMD5,
+					Jobs:     jobs,
+				}
+				if data, err := json.Marshal(snapshot); err == nil {
+					event.Payload = data
+				}
 			}
+			// NATS 触发器：保留原始 Payload 不覆盖，tasks 信息通过 event.Tasks/TasksMD5 传递
+
+			log.InfoContextf(ctx, "[TriggerManager] task snapshot injected: tasks=%d, jobs=%d, md5=%s",
+				len(tasks), len(event.Jobs), tasksMD5)
 		}
 
-		log.InfoContextf(ctx, "[TriggerManager] dispatching trigger: name=%s, type=%s, tasks=%d",
-			event.Name, event.Type, len(m.taskStore.GetAll()))
+		log.InfoContextf(ctx, "[TriggerManager] dispatching trigger: name=%s, type=%s",
+			event.Name, event.Type)
 
 		resp, err := m.plugin.OnTrigger(ctx, event)
 		if err != nil {
 			log.ErrorContextf(ctx, "[TriggerManager] trigger %s failed: %v", event.Name, err)
 		}
 
-		log.InfoContextf(ctx, "[TriggerManager] OnTrigger returned: trigger=%s, hasResp=%v, taskResults=%d, err=%v",
+		log.InfoContextf(ctx, "[TriggerManager] OnTrigger returned: trigger=%s, hasResp=%v, taskResults=%d, dataPoints=%d, err=%v",
 			event.Name, resp != nil, func() int {
 				if resp != nil {
 					return len(resp.TaskResults)
+				}
+				return 0
+			}(), func() int {
+				if resp != nil {
+					return len(resp.DataPoints)
 				}
 				return 0
 			}(), err)
@@ -194,6 +212,21 @@ func (m *Manager) wrapHandler() TriggerHandler {
 				m.reporter.ReportAsync(ctx, tr.TaskID, tr.Status, tr.Result)
 			}
 		}
+
+		// 自动写入 DataPoints 到 xData
+		if resp != nil && len(resp.DataPoints) > 0 && m.storageWriter != nil {
+			writeCfg := storage.WriteConfig{}
+			if resp.WriteConfig != nil {
+				writeCfg.DatasetID = resp.WriteConfig.DatasetID
+				writeCfg.WriteMode = resp.WriteConfig.WriteMode
+			}
+			log.InfoContextf(ctx, "[TriggerManager] writing %d data points to xData (dataset=%d)",
+				len(resp.DataPoints), writeCfg.DatasetID)
+			if writeErr := m.storageWriter.Write(ctx, writeCfg, resp.DataPoints); writeErr != nil {
+				log.ErrorContextf(ctx, "[TriggerManager] failed to write data points: %v", writeErr)
+			}
+		}
+
 		return err
 	}
 }

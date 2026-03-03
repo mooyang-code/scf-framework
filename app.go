@@ -16,6 +16,7 @@ import (
 	"github.com/mooyang-code/scf-framework/model"
 	"github.com/mooyang-code/scf-framework/plugin"
 	"github.com/mooyang-code/scf-framework/reporter"
+	"github.com/mooyang-code/scf-framework/storage"
 	"github.com/mooyang-code/scf-framework/trigger"
 	"trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/log"
@@ -23,14 +24,16 @@ import (
 
 // App SCF 框架主应用
 type App struct {
-	opts        *options
-	cfg         *config.FrameworkConfig
-	runtime     *config.RuntimeState
-	taskStore   *config.TaskInstanceStore
-	plugin      plugin.Plugin
-	triggerMgr  *trigger.Manager
-	gw          *gateway.Gateway
-	dnsResolver *dnsproxy.Resolver
+	opts          *options
+	cfg           *config.FrameworkConfig
+	runtime       *config.RuntimeState
+	taskStore     *config.TaskInstanceStore
+	plugin        plugin.Plugin
+	triggerMgr    *trigger.Manager
+	gw            *gateway.Gateway
+	dnsResolver   *dnsproxy.Resolver
+	storageWriter *storage.Writer
+	storageReader *storage.Reader
 }
 
 // New 创建 App 实例
@@ -65,6 +68,16 @@ func (a *App) DNSResolver() *dnsproxy.Resolver {
 	return a.dnsResolver
 }
 
+// StorageWriter 返回 xData 写入器（实现 plugin.Framework 接口）
+func (a *App) StorageWriter() *storage.Writer {
+	return a.storageWriter
+}
+
+// StorageReader 返回 xData 读取器（实现 plugin.Framework 接口）
+func (a *App) StorageReader() *storage.Reader {
+	return a.storageReader
+}
+
 // Run 启动应用
 func (a *App) Run(ctx context.Context) error {
 	// 1. 加载配置
@@ -83,6 +96,10 @@ func (a *App) Run(ctx context.Context) error {
 
 	// 4. 初始化 TaskInstanceStore
 	a.taskStore = config.NewTaskInstanceStore()
+
+	// 4.5 初始化 Storage（Writer + Reader）
+	a.storageWriter = storage.NewWriter(a.runtime.GetStorageServerURL())
+	a.storageReader = storage.NewReader(a.runtime.GetStorageServerURL())
 
 	// 5. 调用 plugin.Init
 	if err := a.plugin.Init(ctx, a); err != nil {
@@ -148,7 +165,7 @@ func (a *App) Run(ctx context.Context) error {
 
 	// 8. 初始化 TaskReporter 和 TriggerManager
 	taskReporter := reporter.NewTaskReporter(a.runtime)
-	a.triggerMgr = trigger.NewManager(a.plugin, a.taskStore, a.runtime, taskReporter, a.dnsResolver)
+	a.triggerMgr = trigger.NewManager(a.plugin, a.taskStore, a.runtime, taskReporter, a.dnsResolver, a.storageWriter, a.storageReader)
 
 	// 将框架配置中的 triggers 转换为 model.TriggerConfig
 	triggerConfigs := make([]config.TriggerConfig, len(cfg.Triggers))

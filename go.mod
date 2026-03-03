@@ -9,12 +9,15 @@ require (
 	github.com/nats-io/nats.go v1.37.0
 	github.com/orcaman/concurrent-map/v2 v2.0.1
 	gopkg.in/yaml.v3 v3.0.1
+	trpc.group/trpc-go/trpc-database/localcache v1.0.0
 	trpc.group/trpc-go/trpc-go v1.0.3
 )
 
 require (
 	github.com/BurntSushi/toml v0.3.1 // indirect
+	github.com/RussellLuo/timingwheel v0.0.0-20191022104228-f534fd34a762 // indirect
 	github.com/andybalholm/brotli v1.0.4 // indirect
+	github.com/cespare/xxhash v1.1.0 // indirect
 	github.com/fsnotify/fsnotify v1.4.9 // indirect
 	github.com/go-playground/form/v4 v4.2.0 // indirect
 	github.com/golang/snappy v0.0.3 // indirect
