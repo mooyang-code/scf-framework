@@ -12,6 +12,7 @@ type RuntimeState struct {
 	version          string
 	mooxServerURL    string // Moox Server 网关地址（由探测报文下发）
 	storageServerURL string // xData 存储服务地址（由探测报文下发）
+	storageServerRPC string // xData 存储服务 RPC 地址（由探测报文下发，格式 ip://host:port）
 }
 
 // NewRuntimeState 从配置初始化运行时状态
@@ -93,5 +94,21 @@ func (rs *RuntimeState) UpdateStorageServerURL(url string) {
 	defer rs.mu.Unlock()
 	if url != "" {
 		rs.storageServerURL = url
+	}
+}
+
+// GetStorageServerRPC 获取 xData 存储服务 RPC 地址
+func (rs *RuntimeState) GetStorageServerRPC() string {
+	rs.mu.RLock()
+	defer rs.mu.RUnlock()
+	return rs.storageServerRPC
+}
+
+// UpdateStorageServerRPC 更新 xData 存储服务 RPC 地址
+func (rs *RuntimeState) UpdateStorageServerRPC(rpcAddr string) {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	if rpcAddr != "" {
+		rs.storageServerRPC = rpcAddr
 	}
 }

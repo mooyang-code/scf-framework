@@ -29,7 +29,7 @@ type Framework interface {
 	Runtime() *config.RuntimeState
 	TaskStore() *config.TaskInstanceStore
 	DNSResolver() *dnsproxy.Resolver   // 无配置时返回 nil
-	StorageWriter() *storage.Writer    // xData 写入器
+	StorageWriter() *storage.RPCWriter // xData 写入器
 	StorageReader() *storage.Reader    // xData 读取器
 }
 
@@ -186,7 +186,6 @@ func (a *HTTPPluginAdapter) OnTrigger(ctx context.Context, event *model.TriggerE
 	}
 
 	log.InfoContextf(ctx, "[HTTPPluginAdapter] plugin %s parsed response: task_results=%d", a.name, len(triggerResp.TaskResults))
-
 	return &triggerResp, nil
 }
 
