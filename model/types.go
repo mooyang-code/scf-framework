@@ -45,6 +45,7 @@ type CloudFunctionEvent struct {
 	Timestamp        string                 `json:"timestamp,omitempty"`
 	MooxServerURL    string                 `json:"moox_server_url,omitempty"`
 	StorageServerURL string                 `json:"storage_server_url,omitempty"`
+	StorageServerRPC string                 `json:"storage_server_rpc,omitempty"`
 }
 
 // HeartbeatPayload 心跳上报负载（业务特有字段通过 HeartbeatContributor 注入）

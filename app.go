@@ -6,7 +6,6 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 
 	"github.com/mooyang-code/go-commlib/trpc-database/timer"
@@ -99,7 +98,7 @@ func (a *App) Run(ctx context.Context) error {
 	a.taskStore = config.NewTaskInstanceStore()
 
 	// 4.5 初始化 Storage（RPC 方式）
-	storageTarget := extractRPCTarget(a.runtime.GetStorageServerURL())
+	storageTarget := a.runtime.GetStorageServerRPC()
 	a.storageWriter = storage.NewRPCWriter(storageTarget, cfg.Storage)
 	a.storageReader = storage.NewReader(storageTarget, cfg.Storage)
 
@@ -121,7 +120,7 @@ func (a *App) Run(ctx context.Context) error {
 
 	// 6. 注册 HTTP Gateway（如启用）
 	if a.opts.enableGateway {
-		probeHandler := heartbeat.NewProbeHandler(a.runtime, a.plugin)
+		probeHandler := heartbeat.NewProbeHandler(a.runtime, a.plugin, a.storageWriter, a.storageReader)
 		a.gw = gateway.NewGateway(probeHandler)
 
 		// HTTPPluginAdapter 模式：设置 catch-all 转发
@@ -240,22 +239,4 @@ func toModelTriggerConfigs(cfgs []config.TriggerConfig) []model.TriggerConfig {
 		}
 	}
 	return result
-}
-
-// extractRPCTarget 从 HTTP URL 提取 RPC target
-// 输入 "http://10.0.0.1:8080" → 输出 "ip://10.0.0.1:8080"
-// 输入 "" → 输出 ""
-func extractRPCTarget(httpURL string) string {
-	if httpURL == "" {
-		return ""
-	}
-	// 如果已经是 ip:// 格式，直接返回
-	if strings.HasPrefix(httpURL, "ip://") {
-		return httpURL
-	}
-	u, err := url.Parse(httpURL)
-	if err != nil {
-		return "ip://" + httpURL
-	}
-	return "ip://" + u.Host
 }

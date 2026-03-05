@@ -10,20 +10,25 @@ import (
 	"github.com/mooyang-code/scf-framework/config"
 	"github.com/mooyang-code/scf-framework/model"
 	"github.com/mooyang-code/scf-framework/plugin"
+	"github.com/mooyang-code/scf-framework/storage"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
 // ProbeHandler 探测请求处理器
 type ProbeHandler struct {
-	runtime *config.RuntimeState
-	plugin  plugin.Plugin
+	runtime       *config.RuntimeState
+	plugin        plugin.Plugin
+	storageWriter *storage.RPCWriter
+	storageReader *storage.Reader
 }
 
 // NewProbeHandler 创建探测处理器
-func NewProbeHandler(rs *config.RuntimeState, p plugin.Plugin) *ProbeHandler {
+func NewProbeHandler(rs *config.RuntimeState, p plugin.Plugin, sw *storage.RPCWriter, sr *storage.Reader) *ProbeHandler {
 	return &ProbeHandler{
-		runtime: rs,
-		plugin:  p,
+		runtime:       rs,
+		plugin:        p,
+		storageWriter: sw,
+		storageReader: sr,
 	}
 }
 
@@ -59,6 +64,18 @@ func (h *ProbeHandler) ProcessProbe(ctx context.Context, event model.CloudFuncti
 	if event.StorageServerURL != "" {
 		log.DebugContextf(ctx, "[ProcessProbe] 更新存储服务地址 %s", event.StorageServerURL)
 		h.runtime.UpdateStorageServerURL(event.StorageServerURL)
+	}
+
+	// 更新存储服务 RPC 地址，并动态刷新 storageWriter/storageReader 的 target
+	if event.StorageServerRPC != "" {
+		log.DebugContextf(ctx, "[ProcessProbe] 更新存储服务 RPC 地址 %s", event.StorageServerRPC)
+		h.runtime.UpdateStorageServerRPC(event.StorageServerRPC)
+		if h.storageWriter != nil {
+			h.storageWriter.UpdateURL(event.StorageServerRPC)
+		}
+		if h.storageReader != nil {
+			h.storageReader.UpdateURL(event.StorageServerRPC)
+		}
 	}
 
 	// 构建探测响应

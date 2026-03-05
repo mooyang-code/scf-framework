@@ -151,6 +151,7 @@ func (m *Manager) injectMetadata(event *model.TriggerEvent) (nodeID, version str
 		event.Metadata["nodeID"] = nodeID
 		event.Metadata["version"] = version
 		event.Metadata["storage_server_url"] = m.runtime.GetStorageServerURL()
+		event.Metadata["storage_server_rpc"] = m.runtime.GetStorageServerRPC()
 	}
 
 	if m.dnsResolver != nil {
