@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	"github.com/mooyang-code/go-commlib/trpc-database/timer"
@@ -32,7 +33,7 @@ type App struct {
 	triggerMgr    *trigger.Manager
 	gw            *gateway.Gateway
 	dnsResolver   *dnsproxy.Resolver
-	storageWriter *storage.Writer
+	storageWriter *storage.RPCWriter
 	storageReader *storage.Reader
 }
 
@@ -69,7 +70,7 @@ func (a *App) DNSResolver() *dnsproxy.Resolver {
 }
 
 // StorageWriter 返回 xData 写入器（实现 plugin.Framework 接口）
-func (a *App) StorageWriter() *storage.Writer {
+func (a *App) StorageWriter() *storage.RPCWriter {
 	return a.storageWriter
 }
 
@@ -97,9 +98,10 @@ func (a *App) Run(ctx context.Context) error {
 	// 4. 初始化 TaskInstanceStore
 	a.taskStore = config.NewTaskInstanceStore()
 
-	// 4.5 初始化 Storage（Writer + Reader）
-	a.storageWriter = storage.NewWriter(a.runtime.GetStorageServerURL())
-	a.storageReader = storage.NewReader(a.runtime.GetStorageServerURL())
+	// 4.5 初始化 Storage（RPC 方式）
+	storageTarget := extractRPCTarget(a.runtime.GetStorageServerURL())
+	a.storageWriter = storage.NewRPCWriter(storageTarget, cfg.Storage)
+	a.storageReader = storage.NewReader(storageTarget, cfg.Storage)
 
 	// 5. 调用 plugin.Init
 	if err := a.plugin.Init(ctx, a); err != nil {
@@ -238,4 +240,22 @@ func toModelTriggerConfigs(cfgs []config.TriggerConfig) []model.TriggerConfig {
 		}
 	}
 	return result
+}
+
+// extractRPCTarget 从 HTTP URL 提取 RPC target
+// 输入 "http://10.0.0.1:8080" → 输出 "ip://10.0.0.1:8080"
+// 输入 "" → 输出 ""
+func extractRPCTarget(httpURL string) string {
+	if httpURL == "" {
+		return ""
+	}
+	// 如果已经是 ip:// 格式，直接返回
+	if strings.HasPrefix(httpURL, "ip://") {
+		return httpURL
+	}
+	u, err := url.Parse(httpURL)
+	if err != nil {
+		return "ip://" + httpURL
+	}
+	return "ip://" + u.Host
 }

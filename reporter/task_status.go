@@ -9,7 +9,7 @@ import (
 	"net/http"
 	"time"
 
-	retry "github.com/avast/retry-go"
+	"github.com/avast/retry-go"
 	"github.com/mooyang-code/scf-framework/config"
 	"trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/log"

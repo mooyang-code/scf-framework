@@ -363,7 +363,7 @@ func (t *NATSTrigger) backfillFromStorage(ctx context.Context, symbol, interval 
 		Limit:     t.config.CacheMaxItems,
 	}
 
-	points, err := t.storageReader.Read(ctx, cfg)
+	points, err := t.storageReader.GetData(ctx, cfg)
 	if err != nil {
 		log.ErrorContextf(ctx, "[NATSTrigger] %s backfill failed: %v", t.name, err)
 		return nil
@@ -377,21 +377,8 @@ func (t *NATSTrigger) backfillFromStorage(ctx context.Context, symbol, interval 
 			"symbol":    symbol,
 			"interval":  interval,
 		}
-		for k, fv := range p.Fields {
-			switch fv.Type {
-			case 1:
-				if fv.Str != nil {
-					kline[k] = *fv.Str
-				}
-			case 2:
-				if fv.Int != nil {
-					kline[k] = *fv.Int
-				}
-			case 3:
-				if fv.Float != nil {
-					kline[k] = *fv.Float
-				}
-			}
+		for k, v := range p.Fields {
+			kline[k] = v
 		}
 		if data, err := json.Marshal(kline); err == nil {
 			klines = append(klines, data)
