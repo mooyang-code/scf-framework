@@ -32,7 +32,7 @@ type App struct {
 	triggerMgr    *trigger.Manager
 	gw            *gateway.Gateway
 	dnsResolver   *dnsproxy.Resolver
-	storageWriter *storage.Writer
+	storageWriter *storage.RPCWriter
 	storageReader *storage.Reader
 }
 
@@ -69,7 +69,7 @@ func (a *App) DNSResolver() *dnsproxy.Resolver {
 }
 
 // StorageWriter 返回 xData 写入器（实现 plugin.Framework 接口）
-func (a *App) StorageWriter() *storage.Writer {
+func (a *App) StorageWriter() *storage.RPCWriter {
 	return a.storageWriter
 }
 
@@ -97,9 +97,10 @@ func (a *App) Run(ctx context.Context) error {
 	// 4. 初始化 TaskInstanceStore
 	a.taskStore = config.NewTaskInstanceStore()
 
-	// 4.5 初始化 Storage（Writer + Reader）
-	a.storageWriter = storage.NewWriter(a.runtime.GetStorageServerURL())
-	a.storageReader = storage.NewReader(a.runtime.GetStorageServerURL())
+	// 4.5 初始化 Storage（RPC 方式）
+	storageTarget := a.runtime.GetStorageServerRPC()
+	a.storageWriter = storage.NewRPCWriter(storageTarget, cfg.Storage)
+	a.storageReader = storage.NewReader(storageTarget, cfg.Storage)
 
 	// 5. 调用 plugin.Init
 	if err := a.plugin.Init(ctx, a); err != nil {
@@ -119,7 +120,7 @@ func (a *App) Run(ctx context.Context) error {
 
 	// 6. 注册 HTTP Gateway（如启用）
 	if a.opts.enableGateway {
-		probeHandler := heartbeat.NewProbeHandler(a.runtime, a.plugin)
+		probeHandler := heartbeat.NewProbeHandler(a.runtime, a.plugin, a.storageWriter, a.storageReader)
 		a.gw = gateway.NewGateway(probeHandler)
 
 		// HTTPPluginAdapter 模式：设置 catch-all 转发

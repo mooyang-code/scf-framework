@@ -6,6 +6,7 @@ require (
 	github.com/avast/retry-go v3.0.0+incompatible
 	github.com/gorhill/cronexpr v0.0.0-20180427100037-88b0669f7d75
 	github.com/mooyang-code/go-commlib/trpc-database/timer v0.0.2
+	github.com/mooyang-code/xData-mini/storage/proto v0.0.0
 	github.com/nats-io/nats.go v1.37.0
 	github.com/orcaman/concurrent-map/v2 v2.0.1
 	gopkg.in/yaml.v3 v3.0.1
@@ -47,7 +48,9 @@ require (
 	golang.org/x/sync v0.1.0 // indirect
 	golang.org/x/sys v0.16.0 // indirect
 	golang.org/x/text v0.14.0 // indirect
-	google.golang.org/protobuf v1.33.0 // indirect
+	google.golang.org/protobuf v1.36.6 // indirect
 	trpc.group/trpc-go/tnet v1.0.1 // indirect
-	trpc.group/trpc/trpc-protocol/pb/go/trpc v1.0.0 // indirect
+	trpc.group/trpc/trpc-protocol/pb/go/trpc v1.0.1 // indirect
 )
+
+replace github.com/mooyang-code/xData-mini/storage/proto => ../xData-mini/storage/proto/gen
