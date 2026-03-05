@@ -14,7 +14,23 @@ type FrameworkConfig struct {
 	Heartbeat HeartbeatConfig  `yaml:"heartbeat"`
 	Triggers  []TriggerConfig  `yaml:"triggers"`
 	DNSProxy  *dnsproxy.Config `yaml:"dns_proxy,omitempty"` // DNS 代理配置，可选
+	Storage   *StorageConfig   `yaml:"storage,omitempty"`   // xData 存储配置，可选
 	Plugin    yaml.Node        `yaml:"plugin"`              // 延迟解析，留给插件
+}
+
+// StorageConfig xData 存储配置
+type StorageConfig struct {
+	AuthInfo  AuthInfoConfig `yaml:"auth_info"`
+	ProjectID int            `yaml:"project_id"`
+	DatasetID int            `yaml:"dataset_id"`
+	WriteMode string         `yaml:"write_mode,omitempty"` // "set_data"（默认）或 "upsert_object"
+	Freq      string         `yaml:"freq,omitempty"`       // SetData 时序频率，如 "1m"
+}
+
+// AuthInfoConfig xData 认证信息
+type AuthInfoConfig struct {
+	AppID  string `yaml:"app_id"`
+	AppKey string `yaml:"app_key"`
 }
 
 // SystemConfig 系统配置

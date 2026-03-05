@@ -92,8 +92,9 @@ func (r *Reporter) buildPayload() map[string]interface{} {
 	tasksMD5 := r.taskStore.GetCurrentMD5()
 
 	payload := map[string]interface{}{
-		"node_id":   nodeID,
-		"node_type": "scf",
+		"node_id":          nodeID,
+		"node_type":        "scf",
+		"running_version":  version,
 		"metadata": map[string]interface{}{
 			"version":    version,
 			"go_version": runtime.Version(),

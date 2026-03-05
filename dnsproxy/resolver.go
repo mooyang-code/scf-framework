@@ -24,21 +24,33 @@ type Resolver struct {
 	cfg             *Config
 	mu              sync.RWMutex
 	records         map[string]*DNSRecord
-	mooxServerURLFn func() string // 获取 Moox Server URL（用于远端降级获取）
+	mooxServerURLFn func() string                // 获取 Moox Server URL（用于远端降级获取）
+	nodeInfoFn      func() (nodeID, version string) // 获取节点信息（用于日志上下文）
 }
 
 // NewResolver 创建 DNS 解析器
-func NewResolver(cfg *Config, mooxServerURLFn func() string) *Resolver {
+func NewResolver(cfg *Config, mooxServerURLFn func() string, nodeInfoFn func() (string, string)) *Resolver {
 	return &Resolver{
 		cfg:             cfg,
 		records:         make(map[string]*DNSRecord),
 		mooxServerURLFn: mooxServerURLFn,
+		nodeInfoFn:      nodeInfoFn,
 	}
+}
+
+// withNodeContext 向 context 注入节点上下文字段（nodeID, version, func），使后续所有日志自动携带
+func (r *Resolver) withNodeContext(ctx context.Context, funcName string) context.Context {
+	nodeID, version := "", ""
+	if r.nodeInfoFn != nil {
+		nodeID, version = r.nodeInfoFn()
+	}
+	return log.WithContextFields(ctx, "nodeID", nodeID, "version", version, "func", funcName)
 }
 
 // ScheduledResolve TRPC Timer 入口函数（同 heartbeat.ScheduledHeartbeat 模式）
 func (r *Resolver) ScheduledResolve(c context.Context, _ string) error {
 	ctx := trpc.CloneContext(c)
+	ctx = r.withNodeContext(ctx, "ScheduledResolve")
 	log.DebugContext(ctx, "ScheduledResolve Enter")
 	if err := r.Resolve(ctx); err != nil {
 		log.ErrorContextf(ctx, "scheduled resolve DNS failed: %v", err)
@@ -50,6 +62,7 @@ func (r *Resolver) ScheduledResolve(c context.Context, _ string) error {
 
 // Resolve 执行一轮完整 DNS 解析
 func (r *Resolver) Resolve(ctx context.Context) error {
+	ctx = r.withNodeContext(ctx, "Resolve")
 	domains := r.cfg.ScheduledDomains
 	if len(domains) == 0 {
 		log.DebugContext(ctx, "no domains configured for DNS resolution")

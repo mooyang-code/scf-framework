@@ -1,105 +1,250 @@
 package storage
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
+	"math"
 	"time"
 
 	"github.com/avast/retry-go"
+	"github.com/mooyang-code/scf-framework/config"
 	"github.com/mooyang-code/scf-framework/model"
+	pb "github.com/mooyang-code/xData-mini/storage/proto"
+	"trpc.group/trpc-go/trpc-go"
+	"trpc.group/trpc-go/trpc-go/client"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
-// Writer xData 写入器
-type Writer struct {
-	storageURL string
-	client     *http.Client
+// WriteOverride 写入时的覆盖配置（用于 WriteGroups 场景）
+type WriteOverride struct {
+	WriteMode string
+	DatasetID *int
+	Freq      string
+	AppKey    string
 }
 
-// NewWriter 创建 xData Writer
-func NewWriter(storageURL string) *Writer {
-	return &Writer{
-		storageURL: storageURL,
-		client:     &http.Client{Timeout: 30 * time.Second},
+// RPCWriter 通过 tRPC client 写入 xData
+type RPCWriter struct {
+	target     string // RPC 目标地址 "ip://host:port"
+	storageCfg *config.StorageConfig
+}
+
+// NewRPCWriter 创建 xData RPCWriter
+func NewRPCWriter(target string, storageCfg *config.StorageConfig) *RPCWriter {
+	return &RPCWriter{
+		target:     target,
+		storageCfg: storageCfg,
 	}
 }
 
-// WriteConfig 写入配置
-type WriteConfig struct {
-	DatasetID int    `json:"dataset_id"`
-	WriteMode string `json:"write_mode,omitempty"` // "upsert" 或 "append"
+// UpdateURL 更新存储服务地址（运行时由心跳下发更新）
+func (w *RPCWriter) UpdateURL(target string) {
+	if target != "" {
+		w.target = target
+	}
 }
 
-// setDataRequest xData SetData 请求体
-type setDataRequest struct {
-	DatasetID int           `json:"dataset_id"`
-	WriteMode string        `json:"write_mode,omitempty"`
-	Data      []setDataItem `json:"data"`
-}
-
-// setDataItem 单条写入数据
-type setDataItem struct {
-	Times    string                      `json:"times"`
-	ObjectID string                      `json:"object_id"`
-	Fields   map[string]model.FieldValue `json:"fields"`
-}
-
-// Write 将数据点写入 xData（带重试）
-func (w *Writer) Write(ctx context.Context, cfg WriteConfig, points []model.DataPoint) error {
+// SetData 将数据点通过 SetData RPC 写入 xData
+func (w *RPCWriter) SetData(ctx context.Context, points []model.DataPoint, override *WriteOverride) error {
 	if len(points) == 0 {
 		return nil
 	}
-
-	if w.storageURL == "" {
-		log.WarnContextf(ctx, "[StorageWriter] skip write: storage URL not available")
+	if w.target == "" {
+		log.WarnContextf(ctx, "[RPCWriter] skip write: target not available")
+		return nil
+	}
+	if w.storageCfg == nil {
+		log.WarnContextf(ctx, "[RPCWriter] skip write: storage config not available")
 		return nil
 	}
 
-	url := w.storageURL + "/xdata/SetData"
-
-	items := make([]setDataItem, len(points))
-	for i, p := range points {
-		items[i] = setDataItem{
-			Times:    p.Times,
-			ObjectID: p.ObjectID,
-			Fields:   p.Fields,
+	// 确定参数
+	datasetID := w.storageCfg.DatasetID
+	freq := w.storageCfg.Freq
+	appKey := w.storageCfg.AuthInfo.AppKey
+	if override != nil {
+		if override.DatasetID != nil {
+			datasetID = *override.DatasetID
+		}
+		if override.Freq != "" {
+			freq = override.Freq
+		}
+		if override.AppKey != "" {
+			appKey = override.AppKey
 		}
 	}
 
-	reqBody := setDataRequest{
-		DatasetID: cfg.DatasetID,
-		WriteMode: cfg.WriteMode,
-		Data:      items,
+	// 按 object_id 分组
+	grouped := make(map[string][]model.DataPoint)
+	for _, p := range points {
+		grouped[p.ObjectID] = append(grouped[p.ObjectID], p)
 	}
 
-	data, err := json.Marshal(reqBody)
-	if err != nil {
-		return fmt.Errorf("failed to marshal SetData request: %w", err)
+	// 构建 pb.SetDataReq
+	var dataList []*pb.UpdateDataList
+	for objectID, pts := range grouped {
+		rows := make([]*pb.UpdateDataRow, 0, len(pts))
+		for _, p := range pts {
+			pbFields, err := buildUpdateFields(p.Fields)
+			if err != nil {
+				log.WarnContextf(ctx, "[RPCWriter] skip row: objectID=%s, times=%s, err=%v", objectID, p.Times, err)
+				continue
+			}
+			rows = append(rows, &pb.UpdateDataRow{
+				Times:  p.Times,
+				RowId:  objectID,
+				Fields: pbFields,
+			})
+		}
+		if len(rows) == 0 {
+			continue
+		}
+		dataList = append(dataList, &pb.UpdateDataList{
+			DataKey: &pb.DataKey{
+				ProjectId: int32(w.storageCfg.ProjectID),
+				DatasetId: int32(datasetID),
+				ObjectId:  objectID,
+				Freq:      freq,
+			},
+			DataRows: rows,
+		})
 	}
 
-	log.InfoContextf(ctx, "[StorageWriter] writing %d points to dataset %d, body_len=%d", len(points), cfg.DatasetID, len(data))
+	if len(dataList) == 0 {
+		return nil
+	}
 
-	err = retry.Do(
+	req := &pb.SetDataReq{
+		AuthInfo: &pb.AuthInfo{
+			AppId:  w.storageCfg.AuthInfo.AppID,
+			AppKey: appKey,
+		},
+		DataList: dataList,
+	}
+
+	log.InfoContextf(ctx, "[RPCWriter] SetData: %d points, dataset=%d, target=%s", len(points), datasetID, w.target)
+	return w.doSetData(ctx, req, len(points), datasetID)
+}
+
+// upsertBatchSize 单次 UpsertObject RPC 请求的最大行数
+const upsertBatchSize = 25
+
+// UpsertObject 将数据点通过 UpsertObject RPC 写入 xData（自动分批并发）
+func (w *RPCWriter) UpsertObject(ctx context.Context, points []model.DataPoint, override *WriteOverride) error {
+	if len(points) == 0 {
+		return nil
+	}
+	if w.target == "" {
+		log.WarnContextf(ctx, "[RPCWriter] skip upsert: target not available")
+		return nil
+	}
+	if w.storageCfg == nil {
+		log.WarnContextf(ctx, "[RPCWriter] skip upsert: storage config not available")
+		return nil
+	}
+
+	// 确定参数
+	datasetID := w.storageCfg.DatasetID
+	appKey := w.storageCfg.AuthInfo.AppKey
+	if override != nil {
+		if override.DatasetID != nil {
+			datasetID = *override.DatasetID
+		}
+		if override.AppKey != "" {
+			appKey = override.AppKey
+		}
+	}
+
+	// 构建 ObjectRows
+	objectRows := make([]*pb.UpdateObjectRow, 0, len(points))
+	for _, p := range points {
+		pbFields, err := buildUpdateFields(p.Fields)
+		if err != nil {
+			log.WarnContextf(ctx, "[RPCWriter] skip upsert row: objectID=%s, err=%v", p.ObjectID, err)
+			continue
+		}
+		objectRows = append(objectRows, &pb.UpdateObjectRow{
+			ObjectId: p.ObjectID,
+			Fields:   pbFields,
+		})
+	}
+
+	if len(objectRows) == 0 {
+		return nil
+	}
+
+	totalRows := len(objectRows)
+	log.InfoContextf(ctx, "[RPCWriter] UpsertObject: %d rows, dataset=%d, batchSize=%d, target=%s",
+		totalRows, datasetID, upsertBatchSize, w.target)
+
+	// 无需分批，直接发送
+	if totalRows <= upsertBatchSize {
+		req := &pb.UpsertObjectReq{
+			AuthInfo: &pb.AuthInfo{
+				AppId:  w.storageCfg.AuthInfo.AppID,
+				AppKey: appKey,
+			},
+			ProjectId:  int32(w.storageCfg.ProjectID),
+			DatasetId:  int32(datasetID),
+			ObjectRows: objectRows,
+		}
+		return w.doUpsertObject(ctx, req, totalRows, datasetID)
+	}
+
+	// 分批并发发送
+	var handlers []func() error
+	for i := 0; i < totalRows; i += upsertBatchSize {
+		end := i + upsertBatchSize
+		if end > totalRows {
+			end = totalRows
+		}
+		batch := objectRows[i:end]
+		batchIdx := i / upsertBatchSize
+
+		handlers = append(handlers, func() error {
+			req := &pb.UpsertObjectReq{
+				AuthInfo: &pb.AuthInfo{
+					AppId:  w.storageCfg.AuthInfo.AppID,
+					AppKey: appKey,
+				},
+				ProjectId:  int32(w.storageCfg.ProjectID),
+				DatasetId:  int32(datasetID),
+				ObjectRows: batch,
+			}
+			log.InfoContextf(ctx, "[RPCWriter] UpsertObject batch[%d]: rows=%d, dataset=%d",
+				batchIdx, len(batch), datasetID)
+			return w.doUpsertObject(ctx, req, len(batch), datasetID)
+		})
+	}
+
+	log.InfoContextf(ctx, "[RPCWriter] UpsertObject splitting into %d batches", len(handlers))
+	if err := trpc.GoAndWait(handlers...); err != nil {
+		log.ErrorContextf(ctx, "[RPCWriter] UpsertObject batch write had errors: %v", err)
+		return err
+	}
+
+	log.InfoContextf(ctx, "[RPCWriter] UpsertObject all batches success: %d rows written to dataset %d", totalRows, datasetID)
+	return nil
+}
+
+// doSetData 发送 SetData RPC，带重试
+func (w *RPCWriter) doSetData(ctx context.Context, req *pb.SetDataReq, pointCount int, datasetID int) error {
+	err := retry.Do(
 		func() error {
-			req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(data))
-			if err != nil {
-				return fmt.Errorf("failed to create request: %w", err)
-			}
-			req.Header.Set("Content-Type", "application/json")
+			c := pb.NewAccessClientProxy(client.WithTarget(w.target))
+			callCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+			defer cancel()
 
-			resp, err := w.client.Do(req)
+			rsp, err := c.SetData(callCtx, req)
 			if err != nil {
-				return err
+				return fmt.Errorf("SetData RPC failed: %w", err)
 			}
-			defer resp.Body.Close()
-
-			if resp.StatusCode != http.StatusOK {
-				body, _ := io.ReadAll(resp.Body)
-				return fmt.Errorf("SetData returned status %d: %s", resp.StatusCode, string(body))
+			if rsp.GetRetInfo().GetCode() != 0 {
+				return fmt.Errorf("SetData returned error: code=%d, msg=%s",
+					rsp.GetRetInfo().GetCode(), rsp.GetRetInfo().GetMsg())
+			}
+			if len(rsp.GetFailedList()) > 0 {
+				log.WarnContextf(ctx, "[RPCWriter] SetData partial failure: %d failed groups", len(rsp.GetFailedList()))
 			}
 			return nil
 		},
@@ -108,23 +253,171 @@ func (w *Writer) Write(ctx context.Context, cfg WriteConfig, points []model.Data
 		retry.DelayType(retry.BackOffDelay),
 		retry.LastErrorOnly(true),
 		retry.OnRetry(func(n uint, err error) {
-			log.WarnContextf(ctx, "[StorageWriter] retrying SetData: attempt=%d, error=%v", n+1, err)
+			log.WarnContextf(ctx, "[RPCWriter] retrying SetData: attempt=%d, error=%v", n+1, err)
 		}),
 		retry.Context(ctx),
 	)
 
 	if err != nil {
-		log.ErrorContextf(ctx, "[StorageWriter] SetData failed after retries: %v", err)
+		log.ErrorContextf(ctx, "[RPCWriter] SetData failed after retries: %v", err)
 		return err
 	}
-
-	log.InfoContextf(ctx, "[StorageWriter] SetData success: %d points written", len(points))
+	log.InfoContextf(ctx, "[RPCWriter] SetData success: %d points written to dataset %d", pointCount, datasetID)
 	return nil
 }
 
-// UpdateURL 更新存储服务地址（运行时由心跳下发更新）
-func (w *Writer) UpdateURL(url string) {
-	if url != "" {
-		w.storageURL = url
+// doUpsertObject 发送 UpsertObject RPC，带重试
+func (w *RPCWriter) doUpsertObject(ctx context.Context, req *pb.UpsertObjectReq, pointCount int, datasetID int) error {
+	err := retry.Do(
+		func() error {
+			c := pb.NewAccessClientProxy(client.WithTarget(w.target))
+			callCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+			defer cancel()
+
+			rsp, err := c.UpsertObject(callCtx, req)
+			if err != nil {
+				return fmt.Errorf("UpsertObject RPC failed: %w", err)
+			}
+			if rsp.GetRetInfo().GetCode() != 0 {
+				return fmt.Errorf("UpsertObject returned error: code=%d, msg=%s",
+					rsp.GetRetInfo().GetCode(), rsp.GetRetInfo().GetMsg())
+			}
+			if len(rsp.GetFailedRows()) > 0 {
+				log.WarnContextf(ctx, "[RPCWriter] UpsertObject partial failure: %d failed rows", len(rsp.GetFailedRows()))
+			}
+			return nil
+		},
+		retry.Attempts(3),
+		retry.Delay(500*time.Millisecond),
+		retry.DelayType(retry.BackOffDelay),
+		retry.LastErrorOnly(true),
+		retry.OnRetry(func(n uint, err error) {
+			log.WarnContextf(ctx, "[RPCWriter] retrying UpsertObject: attempt=%d, error=%v", n+1, err)
+		}),
+		retry.Context(ctx),
+	)
+
+	if err != nil {
+		log.ErrorContextf(ctx, "[RPCWriter] UpsertObject failed after retries: %v", err)
+		return err
 	}
+	log.InfoContextf(ctx, "[RPCWriter] UpsertObject success: %d points written to dataset %d", pointCount, datasetID)
+	return nil
+}
+
+// ========== 类型推断 ==========
+
+// buildUpdateFields 将 map[string]interface{} 转为 map[string]*pb.UpdateField
+func buildUpdateFields(fields map[string]interface{}) (map[string]*pb.UpdateField, error) {
+	result := make(map[string]*pb.UpdateField, len(fields))
+	for key, val := range fields {
+		field, err := inferAndBuildUpdateField(key, val)
+		if err != nil {
+			return nil, fmt.Errorf("field %q: %w", key, err)
+		}
+		result[key] = field
+	}
+	return result, nil
+}
+
+// inferAndBuildUpdateField 根据 interface{} 值推断 xData 字段类型并构建 pb.UpdateField
+func inferAndBuildUpdateField(fieldKey string, value interface{}) (*pb.UpdateField, error) {
+	field := &pb.UpdateField{
+		FieldKey:   fieldKey,
+		UpdateType: pb.EnumUpdateType_SET_UPDATE,
+	}
+
+	switch v := value.(type) {
+	case string:
+		field.FieldType = pb.EnumFieldType_STR_FIELD
+		field.SimpleValue = &pb.SimpleValue{
+			Value: &pb.SimpleValue_Str{Str: v},
+		}
+
+	case int:
+		field.FieldType = pb.EnumFieldType_INT_FIELD
+		field.SimpleValue = &pb.SimpleValue{
+			Value: &pb.SimpleValue_Int{Int: int64(v)},
+		}
+
+	case int64:
+		field.FieldType = pb.EnumFieldType_INT_FIELD
+		field.SimpleValue = &pb.SimpleValue{
+			Value: &pb.SimpleValue_Int{Int: v},
+		}
+
+	case float64:
+		if v == math.Trunc(v) && !math.IsInf(v, 0) && !math.IsNaN(v) {
+			// 整数值的 float64 → IntField
+			field.FieldType = pb.EnumFieldType_INT_FIELD
+			field.SimpleValue = &pb.SimpleValue{
+				Value: &pb.SimpleValue_Int{Int: int64(v)},
+			}
+		} else {
+			field.FieldType = pb.EnumFieldType_FLOAT_FIELD
+			field.SimpleValue = &pb.SimpleValue{
+				Value: &pb.SimpleValue_Float{Float: v},
+			}
+		}
+
+	case map[string]interface{}:
+		field.FieldType = pb.EnumFieldType_MAP_KV_FIELD
+		mapContainer, err := buildMapContainer(v)
+		if err != nil {
+			return nil, fmt.Errorf("MapKV field %q: %w", fieldKey, err)
+		}
+		field.MapValue = mapContainer
+
+	default:
+		return nil, fmt.Errorf("unsupported value type %T for field %q", value, fieldKey)
+	}
+	return field, nil
+}
+
+// buildMapContainer 将 map[string]interface{} 转为 pb.MapContainer
+func buildMapContainer(m map[string]interface{}) (*pb.MapContainer, error) {
+	entries := make(map[string]*pb.KeyValueEntry, len(m))
+	for k, v := range m {
+		entry, err := buildKeyValueEntry(v)
+		if err != nil {
+			return nil, fmt.Errorf("map key %q: %w", k, err)
+		}
+		entries[k] = entry
+	}
+	return &pb.MapContainer{Entries: entries}, nil
+}
+
+// buildKeyValueEntry 将单个值转为 pb.KeyValueEntry
+func buildKeyValueEntry(value interface{}) (*pb.KeyValueEntry, error) {
+	entry := &pb.KeyValueEntry{}
+
+	switch v := value.(type) {
+	case string:
+		entry.Type = pb.EnumFieldType_STR_FIELD
+		entry.Value = &pb.SimpleValue{
+			Value: &pb.SimpleValue_Str{Str: v},
+		}
+
+	case int:
+		entry.Type = pb.EnumFieldType_INT_FIELD
+		entry.Value = &pb.SimpleValue{
+			Value: &pb.SimpleValue_Int{Int: int64(v)},
+		}
+
+	case int64:
+		entry.Type = pb.EnumFieldType_INT_FIELD
+		entry.Value = &pb.SimpleValue{
+			Value: &pb.SimpleValue_Int{Int: v},
+		}
+
+	case float64:
+		entry.Type = pb.EnumFieldType_FLOAT_FIELD
+		entry.Value = &pb.SimpleValue{
+			Value: &pb.SimpleValue_Float{Float: v},
+		}
+
+	default:
+		return nil, fmt.Errorf("unsupported MapKV value type %T", value)
+	}
+	return entry, nil
 }
