@@ -94,6 +94,7 @@ func (r *Reporter) buildPayload() map[string]interface{} {
 	payload := map[string]interface{}{
 		"node_id":   nodeID,
 		"node_type": "scf",
+		"version":   version,
 		"metadata": map[string]interface{}{
 			"version":    version,
 			"go_version": runtime.Version(),
